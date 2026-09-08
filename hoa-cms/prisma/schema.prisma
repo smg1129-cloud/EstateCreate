@@ -1,0 +1,707 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── Tenant boundary ──────────────────────────────────────────────────────
+// Every tenant-scoped model below carries organizationId and is filtered by
+// it on every query (see src/lib/rbac.ts / src/lib/db-scope helpers) — not
+// just hidden in the UI. This firm is the only tenant today, but the model
+// exists from day one since retrofitting isolation later is far more
+// expensive than including it now.
+
+model Organization {
+  id   String @id @default(cuid())
+  name String
+
+  offices   Office[]
+  users     User[]
+  clients   Client[]
+  contacts  Contact[]
+  matters   Matter[]
+  documents Document[]
+  auditLogs AuditLog[]
+
+  createdAt DateTime @default(now())
+}
+
+// ── Identity / firm structure ────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+  ATTORNEY
+  PARALEGAL
+  BILLING
+  READONLY
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  DEACTIVATED
+}
+
+model Office {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  name         String
+  addressLine1 String
+  addressLine2 String?
+  city         String
+  state        String  @default("FL")
+  postalCode   String
+  phone        String?
+
+  users   User[]
+  clients Client[]
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId])
+}
+
+model User {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  email        String     @unique
+  passwordHash String
+  role         Role
+  status       UserStatus @default(ACTIVE)
+
+  firstName String
+  lastName  String
+  phone     String?
+  barNumber String? // Florida Bar # for ATTORNEY role
+
+  officeId String?
+  office   Office? @relation(fields: [officeId], references: [id])
+
+  // MFA fields scaffolded but not enforced/enrolled in Phase 1.
+  mfaEnabled   Boolean @default(false)
+  mfaSecretEnc String?
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  lastLoginAt DateTime?
+
+  relationshipClients  Client[]           @relation("ClientRelationshipAttorney")
+  responsibleMatters   Matter[]           @relation("MatterResponsibleAttorney")
+  assignedMatters      Matter[]           @relation("MatterAssignedParalegal")
+  assignedDeadlines    Deadline[]         @relation("DeadlineAssignee")
+  authoredNotes        Note[]             @relation("NoteAuthor")
+  uploadedDocuments    Document[]         @relation("DocumentUploader")
+  firmLedgerEntries    LedgerEntry[]      @relation("LedgerEntryCreator")
+  ownerLedgerEntries   OwnerLedgerEntry[] @relation("OwnerLedgerEntryCreator")
+  auditLogs            AuditLog[]         @relation("AuditActor")
+
+  @@index([organizationId])
+  @@index([officeId])
+}
+
+// ── Client (the anchor entity) ───────────────────────────────────────────
+
+enum ClientType {
+  HOA
+  CONDOMINIUM
+  COOPERATIVE
+}
+
+enum ClientStatus {
+  ACTIVE
+  INACTIVE
+  FORMER
+}
+
+/// The Association. Long-running institutional relationship — anchor
+/// entity. A Client accumulates many Matters across practice areas over
+/// years; nothing about a Client is deleted, only status-transitioned to
+/// FORMER.
+model Client {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  clientNumber String       @unique // firm-assigned, e.g. "C-10042"
+  name         String       // "Oak Ridge Homeowners Association, Inc."
+  clientType   ClientType
+  status       ClientStatus @default(ACTIVE)
+
+  addressLine1 String?
+  addressLine2 String?
+  city         String?
+  state        String?      @default("FL")
+  postalCode   String?
+  county       String? // drives FL venue/court defaults
+  federalEin   String?
+
+  officeId               String?
+  office                 Office? @relation(fields: [officeId], references: [id])
+  relationshipAttorneyId String?
+  relationshipAttorney   User?   @relation("ClientRelationshipAttorney", fields: [relationshipAttorneyId], references: [id])
+
+  matters   Matter[]
+  contacts  ClientContact[]
+  notes     Note[]
+  documents Document[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([status])
+  @@index([relationshipAttorneyId])
+}
+
+// ── Contacts (shared entity) ─────────────────────────────────────────────
+
+enum ContactType {
+  BOARD_MEMBER
+  PROPERTY_MANAGER
+  UNIT_OWNER
+  OPPOSING_COUNSEL
+  JUDGE
+  VENDOR
+  OTHER
+}
+
+model Contact {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  contactType ContactType
+  firstName   String
+  lastName    String
+  company     String?
+  email       String?
+  phone       String?
+
+  mailingAddressLine1 String?
+  mailingAddressLine2 String?
+  city                String?
+  state               String?
+  postalCode          String?
+
+  clientLinks ClientContact[]
+  matterLinks MatterContact[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([contactType])
+  @@index([lastName, firstName])
+}
+
+model ClientContact {
+  id        String  @id @default(cuid())
+  clientId  String
+  client    Client  @relation(fields: [clientId], references: [id])
+  contactId String
+  contact   Contact @relation(fields: [contactId], references: [id])
+  role      String // "Board President", "Managing Agent"
+  isPrimary Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@index([clientId])
+  @@index([contactId])
+}
+
+model MatterContact {
+  id        String  @id @default(cuid())
+  matterId  String
+  matter    Matter  @relation(fields: [matterId], references: [id])
+  contactId String
+  contact   Contact @relation(fields: [contactId], references: [id])
+  role      String // "Primary Owner", "Co-Owner", "Opposing Counsel", "Presiding Judge"
+
+  createdAt DateTime @default(now())
+
+  @@index([matterId])
+  @@index([contactId])
+}
+
+// ── Matter (typed child of Client, extensible core) ──────────────────────
+
+enum PracticeArea {
+  COLLECTIONS
+  COVENANT_ENFORCEMENT
+  GENERAL_CORPORATE
+  GENERAL_LITIGATION
+  CLAIMS_MONITORING
+}
+
+enum MatterType {
+  STANDARD
+  BANKRUPTCY_ANCILLARY
+  EVICTION_ANCILLARY
+}
+
+enum MatterStatus {
+  OPEN
+  ON_HOLD
+  CLOSED
+}
+
+/// Generic parent for every practice area. Practice-area-specific data
+/// lives in a 1:1 extension table (see CollectionsMatterDetail). Ancillary
+/// matters (bankruptcy, eviction) are their own Matter rows linked via
+/// parentMatterId AND share the same clientId as the parent — this is what
+/// makes the client-360 rollup (all matters, every practice area, one
+/// place) trivial: db.matter.findMany({ where: { clientId } }).
+model Matter {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  matterNumber String @unique // "2026-COLL-0001"
+  clientId     String
+  client       Client @relation(fields: [clientId], references: [id])
+
+  practiceArea   PracticeArea
+  matterType     MatterType   @default(STANDARD)
+  parentMatterId String?
+  parentMatter   Matter?      @relation("ParentChildMatters", fields: [parentMatterId], references: [id])
+  childMatters   Matter[]     @relation("ParentChildMatters")
+
+  title       String
+  status      MatterStatus @default(OPEN) // synced from practice-area detail status
+  openedDate  DateTime     @default(now())
+  closedDate  DateTime?
+  description String?
+
+  responsibleAttorneyId String
+  responsibleAttorney   User    @relation("MatterResponsibleAttorney", fields: [responsibleAttorneyId], references: [id])
+  assignedParalegalId   String?
+  assignedParalegal     User?   @relation("MatterAssignedParalegal", fields: [assignedParalegalId], references: [id])
+
+  collectionsDetail CollectionsMatterDetail?
+  bankruptcyDetail  BankruptcyMatterDetail?
+  evictionDetail    EvictionMatterDetail?
+
+  contacts          MatterContact[]
+  deadlines         Deadline[]
+  notes             Note[]
+  documents         Document[]
+  ledgerEntries     LedgerEntry[]
+  certifiedMailings CertifiedMailing[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([clientId])
+  @@index([practiceArea, status])
+  @@index([responsibleAttorneyId])
+  @@index([parentMatterId])
+}
+
+// ── Collections/Foreclosure practice area (Phase 1 pilot) ────────────────
+
+enum CollectionsStatus {
+  NEW_REFERRAL
+  DEMAND_LETTER_SENT
+  LIEN_RECORDED
+  REFERRED_TO_SUIT
+  SUIT_FILED
+  ANSWER_PERIOD
+  JUDGMENT
+  SALE_SCHEDULED
+  SALE_HELD
+  CLOSED
+}
+
+enum ClosedReason {
+  PAID_IN_FULL
+  WRITTEN_OFF
+  SETTLED
+  TRANSFERRED_OUT
+  OTHER
+}
+
+model CollectionsMatterDetail {
+  id       String @id @default(cuid())
+  matterId String @unique
+  matter   Matter @relation(fields: [matterId], references: [id])
+
+  // The delinquent unit/lot (owner identity comes via MatterContact, role=Owner)
+  unitAddressLine1 String
+  unitAddressLine2 String?
+  unitCity         String
+  unitState        String  @default("FL")
+  unitPostalCode   String
+
+  status          CollectionsStatus @default(NEW_REFERRAL)
+  statusChangedAt DateTime          @default(now())
+  referralDate    DateTime          @default(now())
+
+  currentBalanceCents Int     @default(0) // denormalized cache, resynced on each ledger write
+  paymentPlanActive   Boolean @default(false)
+  paidInFull          Boolean @default(false)
+  bankruptcyStayActive Boolean @default(false) // synced from linked BankruptcyMatterDetail.stayStatus
+
+  closedReason ClosedReason?
+  closedAt     DateTime?
+
+  caseNumber          String?
+  court               String?
+  judgeName           String?
+  suitFiledDate       DateTime?
+  judgmentDate        DateTime?
+  judgmentAmountCents Int?
+  saleScheduledDate   DateTime?
+  saleHeldDate        DateTime?
+  salePriceCents      Int?
+
+  liens         LienRecord[]
+  paymentPlans  PaymentPlan[]
+  ledgerEntries OwnerLedgerEntry[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+}
+
+model LienRecord {
+  id                        String                  @id @default(cuid())
+  collectionsMatterDetailId String
+  collectionsMatterDetail   CollectionsMatterDetail @relation(fields: [collectionsMatterDetailId], references: [id])
+
+  recordedDate DateTime
+  orBook       String
+  orPage       String
+  amountCents  Int
+  releasedDate DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([collectionsMatterDetailId])
+}
+
+enum PaymentPlanStatus {
+  ACTIVE
+  COMPLETED
+  DEFAULTED
+  CANCELLED
+}
+
+model PaymentPlan {
+  id                        String                  @id @default(cuid())
+  collectionsMatterDetailId String
+  collectionsMatterDetail   CollectionsMatterDetail @relation(fields: [collectionsMatterDetailId], references: [id])
+
+  startDate          DateTime
+  monthlyAmountCents Int
+  status             PaymentPlanStatus @default(ACTIVE)
+  notes              String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([collectionsMatterDetailId])
+}
+
+enum OwnerLedgerEntryType {
+  ASSESSMENT
+  LATE_FEE
+  INTEREST
+  ATTORNEY_FEE
+  COST
+  PAYMENT
+  ADJUSTMENT
+}
+
+/// What the delinquent OWNER owes the ASSOCIATION — distinct from
+/// LedgerEntry (what the FIRM bills the Client for legal services). Signed
+/// cents: charges positive, PAYMENT/credit ADJUSTMENT negative; balance =
+/// sum, cached on CollectionsMatterDetail.currentBalanceCents.
+model OwnerLedgerEntry {
+  id                        String                  @id @default(cuid())
+  collectionsMatterDetailId String
+  collectionsMatterDetail   CollectionsMatterDetail @relation(fields: [collectionsMatterDetailId], references: [id])
+
+  entryType   OwnerLedgerEntryType
+  amountCents Int
+  description String?
+  entryDate   DateTime @default(now())
+
+  createdById String
+  createdBy   User   @relation("OwnerLedgerEntryCreator", fields: [createdById], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([collectionsMatterDetailId, entryDate])
+}
+
+// ── Ancillary matters (own Matter rows, linked via parentMatterId) ───────
+
+enum BankruptcyChapter {
+  CHAPTER_7
+  CHAPTER_11
+  CHAPTER_13
+}
+
+enum BankruptcyStayStatus {
+  ACTIVE
+  LIFTED
+  DISCHARGED
+  DISMISSED
+}
+
+model BankruptcyMatterDetail {
+  id       String @id @default(cuid())
+  matterId String @unique
+  matter   Matter @relation(fields: [matterId], references: [id])
+
+  caseNumber     String
+  chapter        BankruptcyChapter
+  trusteeName    String?
+  court          String?
+  filedDate      DateTime
+  stayStatus     BankruptcyStayStatus @default(ACTIVE)
+  stayLiftedDate DateTime?
+  dischargeDate  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum EvictionStatus {
+  FILED
+  HEARING_SET
+  JUDGMENT_ENTERED
+  WRIT_ISSUED
+  COMPLETED
+  DISMISSED
+}
+
+model EvictionMatterDetail {
+  id       String @id @default(cuid())
+  matterId String @unique
+  matter   Matter @relation(fields: [matterId], references: [id])
+
+  caseNumber           String
+  court                String?
+  filedDate            DateTime
+  hearingDate          DateTime?
+  writOfPossessionDate DateTime?
+  status               EvictionStatus @default(FILED)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ── Certified mail (adapter-backed) ───────────────────────────────────────
+
+enum CertifiedMailStatus {
+  CREATED
+  IN_TRANSIT
+  DELIVERED
+  RETURNED_UNCLAIMED
+  FAILED
+}
+
+model CertifiedMailing {
+  id         String    @id @default(cuid())
+  matterId   String
+  matter     Matter    @relation(fields: [matterId], references: [id])
+  documentId String?
+  document   Document? @relation(fields: [documentId], references: [id])
+
+  recipientName    String
+  recipientAddress String
+  provider         String // "mock" for Phase 1
+  trackingNumber   String
+  mailedDate       DateTime            @default(now())
+  status           CertifiedMailStatus @default(CREATED)
+  deliveredDate    DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([matterId])
+  @@index([trackingNumber])
+}
+
+// ── Cross-cutting: Deadlines, Notes, Documents, Ledger, Audit ────────────
+
+enum DeadlineType {
+  STATUTE_OF_LIMITATIONS
+  HEARING
+  FILING
+  FOLLOW_UP
+  OTHER
+}
+
+enum DeadlineStatus {
+  OPEN
+  COMPLETED
+  CANCELLED
+}
+
+model Deadline {
+  id       String @id @default(cuid())
+  matterId String
+  matter   Matter @relation(fields: [matterId], references: [id])
+
+  title       String
+  type        DeadlineType
+  dueDate     DateTime
+  status      DeadlineStatus @default(OPEN)
+  completedAt DateTime?
+  notes       String?
+
+  assignedToId String
+  assignedTo   User   @relation("DeadlineAssignee", fields: [assignedToId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([assignedToId, status, dueDate])
+  @@index([matterId])
+}
+
+enum NoteCategory {
+  GENERAL
+  CALL
+  EMAIL
+  COURT_APPEARANCE
+  INTERNAL
+}
+
+/// Attaches to a Client and/or a Matter (at least one required — enforced
+/// at the Zod/server-action layer; see migration for a raw-SQL CHECK
+/// constraint, since Prisma has no native multi-column CHECK).
+model Note {
+  id       String  @id @default(cuid())
+  clientId String?
+  client   Client? @relation(fields: [clientId], references: [id])
+  matterId String?
+  matter   Matter? @relation(fields: [matterId], references: [id])
+
+  category NoteCategory @default(GENERAL)
+  body     String
+
+  authorId String
+  author   User   @relation("NoteAuthor", fields: [authorId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([matterId, createdAt])
+  @@index([clientId, createdAt])
+}
+
+enum DocumentCategory {
+  DEMAND_LETTER
+  LIEN
+  PLEADING
+  CORRESPONDENCE
+  LEDGER_EXPORT
+  OTHER
+}
+
+model Document {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  clientId String?
+  client   Client? @relation(fields: [clientId], references: [id])
+  matterId String?
+  matter   Matter? @relation(fields: [matterId], references: [id])
+
+  category        DocumentCategory @default(OTHER)
+  fileName        String
+  contentType     String
+  sizeBytes       Int
+  storageKey      String // adapter-opaque key; see lib/documentStorage
+  storageProvider String // "mock" for Phase 1
+
+  uploadedById String
+  uploadedBy   User   @relation("DocumentUploader", fields: [uploadedById], references: [id])
+
+  certifiedMailings CertifiedMailing[]
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId])
+  @@index([matterId])
+  @@index([clientId])
+}
+
+enum LedgerEntryType {
+  FEE
+  COST
+  PAYMENT
+  ADJUSTMENT
+}
+
+enum QbSyncStatus {
+  NOT_SYNCED
+  SYNCED
+  ERROR
+}
+
+/// The FIRM billing the CLIENT for legal services — distinct from
+/// OwnerLedgerEntry (owner's debt to the Association). QuickBooks sync is
+/// Phase 2; this table + qbSyncStatus/qbReferenceId is the adapter's target.
+model LedgerEntry {
+  id       String @id @default(cuid())
+  matterId String
+  matter   Matter @relation(fields: [matterId], references: [id])
+
+  entryType   LedgerEntryType
+  description String?
+  amountCents Int
+  entryDate   DateTime @default(now())
+
+  qbSyncStatus  QbSyncStatus @default(NOT_SYNCED)
+  qbReferenceId String?
+
+  createdById String
+  createdBy   User   @relation("LedgerEntryCreator", fields: [createdById], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([matterId, entryDate])
+}
+
+/// Append-only. Written exclusively through lib/audit.ts. Never updated or
+/// deleted by the app. Indexed for both "who did what" and "history of
+/// this record" queries at thousands-of-matters scale; paginate with
+/// keyset (createdAt, id) cursors, not OFFSET, once tables grow past a few
+/// hundred-thousand rows.
+model AuditLog {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  actorId String
+  actor   User   @relation("AuditActor", fields: [actorId], references: [id])
+
+  action     String // "LOGIN", "VIEW", "CREATE", "UPDATE", "STATUS_TRANSITION", "DOWNLOAD"
+  entityType String // "Client", "Matter", "OwnerLedgerEntry", "Document" ...
+  entityId   String?
+
+  ipAddress String?
+  userAgent String?
+  metadata  Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId, createdAt])
+  @@index([actorId, createdAt])
+  @@index([entityType, entityId, createdAt])
+  @@index([createdAt])
+}

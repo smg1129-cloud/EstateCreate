@@ -1,0 +1,50 @@
+{
+  "name": "telehealth-clinic",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "db:migrate": "prisma migrate dev",
+    "db:generate": "prisma generate",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:studio": "prisma studio"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.20.0",
+    "next": "14.2.15",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "next-auth": "^4.24.8",
+    "bcryptjs": "^2.4.3",
+    "otplib": "^12.0.1",
+    "qrcode": "^1.5.4",
+    "zod": "^3.23.8",
+    "stripe": "^16.12.0",
+    "@daily-co/daily-js": "^0.71.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.15",
+    "@types/react": "^18.3.5",
+    "@types/react-dom": "^18.3.0",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/qrcode": "^1.5.5",
+    "typescript": "^5.5.4",
+    "tailwindcss": "^3.4.10",
+    "postcss": "^8.4.41",
+    "autoprefixer": "^10.4.20",
+    "prisma": "^5.20.0",
+    "tsx": "^4.19.1",
+    "eslint": "^8.57.0",
+    "eslint-config-next": "14.2.15"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

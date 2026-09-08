@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: hoacms
+      POSTGRES_PASSWORD: hoacms_dev_only
+      POSTGRES_DB: hoacms
+    ports:
+      - '5432:5432'
+    volumes:
+      - hoacms_pgdata:/var/lib/postgresql/data
+
+volumes:
+  hoacms_pgdata:

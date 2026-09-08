@@ -1,0 +1,497 @@
+// Telehealth clinic data model.
+//
+// Design notes (see COMPLIANCE.md for full rationale):
+// - CRM entities (Lead, CommunicationLog) and ERM/EHR entities (ClinicalNote,
+//   Document, Medication, Allergy, Diagnosis, Prescription) are kept as
+//   separate models with separate access paths, even though they currently
+//   share one database — this keeps the door open to splitting them into
+//   isolated databases/schemas later without a redesign.
+// - Nothing here is hard-deleted. Clinical and audit records use soft-delete
+//   / append-only patterns because retention requirements are legally
+//   mandated (and vary by state) — deletion policy needs legal sign-off.
+// - AuditLog is written to by the application data-access layer (lib/audit.ts)
+//   on every PHI read/write, never edited or deleted by the app itself.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  PATIENT
+  STAFF
+  CLINICIAN
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  DEACTIVATED
+}
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+
+  users     User[]
+  leads     Lead[]
+}
+
+/// Identity + credentials. One row per human who can log in, regardless of role.
+model User {
+  id             String     @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  email          String     @unique
+  passwordHash   String
+  role           Role
+  status         UserStatus @default(ACTIVE)
+
+  // TOTP MFA — required for STAFF/CLINICIAN/ADMIN (enforced in lib/auth.ts),
+  // optional for PATIENT. Secret is encrypted at the application layer
+  // (see lib/encryption.ts) before it's stored here.
+  mfaEnabled     Boolean    @default(false)
+  mfaSecretEnc   String?
+
+  firstName      String
+  lastName       String
+  phone          String?
+
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+  lastLoginAt    DateTime?
+
+  patient        Patient?
+  provider       Provider?
+  auditLogs      AuditLog[]      @relation("AuditActor")
+  assignedLeads  Lead[]          @relation("LeadAssignee")
+  communications CommunicationLog[] @relation("CommAuthor")
+  tasks          StaffTask[]     @relation("TaskAssignee")
+
+  @@index([organizationId])
+}
+
+/// Demographic + non-clinical profile for a patient. DOB/address are PHI
+/// once linked to any clinical activity, so this model is access-scoped
+/// the same as the ERM tables (see lib/rbac.ts).
+model Patient {
+  id             String   @id @default(cuid())
+  userId         String   @unique
+  user           User     @relation(fields: [userId], references: [id])
+
+  dateOfBirth    DateTime
+  addressLine1   String?
+  addressLine2   String?
+  city           String?
+  state          String   // 2-letter USPS code; drives licensure matching
+  postalCode     String?
+  emergencyContactName  String?
+  emergencyContactPhone String?
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  appointments   Appointment[]
+  consents       ConsentRecord[]
+  clinicalNotes  ClinicalNote[]
+  documents      Document[]
+  medications    Medication[]
+  allergies      Allergy[]
+  diagnoses      Diagnosis[]
+  prescriptions  Prescription[]
+  invoices       Invoice[]
+  communications CommunicationLog[] @relation("CommPatient")
+  leads          Lead[]
+
+  @@index([state])
+}
+
+model Provider {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id])
+
+  npi         String   @unique
+  specialties String[] // e.g. ["Family Medicine", "Psychiatry"]
+  bio         String?
+
+  createdAt   DateTime @default(now())
+
+  licenses      ProviderLicense[]
+  appointments  Appointment[]
+  clinicalNotes ClinicalNote[]
+  prescriptions Prescription[]
+}
+
+enum LicenseStatus {
+  ACTIVE
+  EXPIRED
+  SUSPENDED
+}
+
+/// One row per state a provider is licensed to practice in. The booking
+/// flow (src/app/book) checks the patient's stated state against an ACTIVE,
+/// non-expired license here before allowing an appointment to be created.
+model ProviderLicense {
+  id             String        @id @default(cuid())
+  providerId     String
+  provider       Provider      @relation(fields: [providerId], references: [id])
+
+  state          String        // 2-letter USPS code
+  licenseNumber  String
+  status         LicenseStatus @default(ACTIVE)
+  issuedAt       DateTime
+  expiresAt      DateTime
+
+  createdAt      DateTime      @default(now())
+
+  @@unique([providerId, state])
+  @@index([state, status])
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  CONVERTED
+  LOST
+}
+
+/// CRM entity for a prospective (or not-yet-linked) patient. Deliberately
+/// separate from Patient — a Lead may hold minimal contact info and no PHI
+/// until it converts into a Patient + Appointment.
+model Lead {
+  id             String     @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  firstName      String
+  lastName       String
+  email          String?
+  phone          String?
+  source         String?    // e.g. "website-form", "referral", "ad"
+  status         LeadStatus @default(NEW)
+  notes          String?
+
+  assignedToId   String?
+  assignedTo     User?      @relation("LeadAssignee", fields: [assignedToId], references: [id])
+
+  convertedPatientId String?
+  convertedPatient   Patient? @relation(fields: [convertedPatientId], references: [id])
+
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  communications CommunicationLog[] @relation("CommLead")
+
+  @@index([organizationId, status])
+}
+
+enum CommChannel {
+  EMAIL
+  SMS
+  PHONE
+  PORTAL_MESSAGE
+  NOTE
+}
+
+enum CommDirection {
+  INBOUND
+  OUTBOUND
+}
+
+/// CRM communication history. Can relate to a Lead and/or a Patient.
+/// Content here is operational/administrative (scheduling, billing
+/// questions) — clinical content belongs in ClinicalNote instead.
+model CommunicationLog {
+  id          String        @id @default(cuid())
+
+  leadId      String?
+  lead        Lead?         @relation("CommLead", fields: [leadId], references: [id])
+
+  patientId   String?
+  patient     Patient?      @relation("CommPatient", fields: [patientId], references: [id])
+
+  authorId    String
+  author      User          @relation("CommAuthor", fields: [authorId], references: [id])
+
+  channel     CommChannel
+  direction   CommDirection
+  subject     String?
+  body        String
+
+  createdAt   DateTime      @default(now())
+
+  @@index([leadId])
+  @@index([patientId])
+}
+
+model StaffTask {
+  id           String    @id @default(cuid())
+  title        String
+  description  String?
+  dueAt        DateTime?
+  completedAt  DateTime?
+
+  assignedToId String
+  assignedTo   User      @relation("TaskAssignee", fields: [assignedToId], references: [id])
+
+  createdAt    DateTime  @default(now())
+
+  @@index([assignedToId, completedAt])
+}
+
+enum AppointmentStatus {
+  SCHEDULED
+  CHECKED_IN
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+enum VisitType {
+  VIDEO
+  PHONE
+}
+
+model Appointment {
+  id             String            @id @default(cuid())
+
+  patientId      String
+  patient        Patient           @relation(fields: [patientId], references: [id])
+
+  providerId     String
+  provider       Provider          @relation(fields: [providerId], references: [id])
+
+  scheduledAt    DateTime
+  durationMin    Int               @default(20)
+  visitType      VisitType         @default(VIDEO)
+  status         AppointmentStatus @default(SCHEDULED)
+  reasonForVisit String?
+
+  // Snapshot of the patient's state at booking time, so a later address
+  // change can't retroactively make a past visit look non-compliant.
+  stateAtTimeOfVisit String
+
+  // Video adapter session reference (e.g. Daily room name). Never store
+  // recordings or transcripts here — see COMPLIANCE.md.
+  videoRoomRef   String?
+
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  clinicalNotes  ClinicalNote[]
+  invoice        Invoice?
+
+  @@index([patientId])
+  @@index([providerId, scheduledAt])
+}
+
+enum ConsentType {
+  TELEHEALTH_CONSENT
+  PRIVACY_NOTICE
+  TERMS_OF_SERVICE
+  FINANCIAL_RESPONSIBILITY
+}
+
+/// Signed consent/acknowledgment records. Captured before any clinical
+/// data collection in the booking flow. Never deleted or overwritten —
+/// a re-consent creates a new row with a bumped version.
+model ConsentRecord {
+  id         String      @id @default(cuid())
+  patientId  String
+  patient    Patient     @relation(fields: [patientId], references: [id])
+
+  type       ConsentType
+  version    String      // e.g. "2026-01-v2" — ties to the exact document text shown
+  signedAt   DateTime    @default(now())
+  ipAddress  String
+
+  @@index([patientId, type])
+}
+
+/// ERM/EHR clinical documentation. Access is restricted to clinicians
+/// treating the patient plus the patient themself (read-only) — enforced
+/// in lib/rbac.ts, not just hidden in the UI.
+model ClinicalNote {
+  id            String       @id @default(cuid())
+
+  patientId     String
+  patient       Patient      @relation(fields: [patientId], references: [id])
+
+  providerId    String
+  provider      Provider     @relation(fields: [providerId], references: [id])
+
+  appointmentId String?
+  appointment   Appointment? @relation(fields: [appointmentId], references: [id])
+
+  noteType      String       @default("SOAP")
+  subjective    String?
+  objective     String?
+  assessment    String?
+  plan          String?
+
+  signedAt      DateTime?
+  // Amendments are appended, not edited in place, once a note is signed —
+  // preserves the original record per EHR documentation-integrity norms.
+  amendmentOf   String?
+
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@index([patientId])
+  @@index([providerId])
+}
+
+model Document {
+  id          String   @id @default(cuid())
+  patientId   String
+  patient     Patient  @relation(fields: [patientId], references: [id])
+
+  uploadedById String
+  fileName    String
+  contentType String
+  // Storage key only — actual bytes live in encrypted object storage
+  // (S3 with SSE-KMS in prod), never inline in the database.
+  storageKey  String
+  sizeBytes   Int
+
+  createdAt   DateTime @default(now())
+
+  @@index([patientId])
+}
+
+model Medication {
+  id         String    @id @default(cuid())
+  patientId  String
+  patient    Patient   @relation(fields: [patientId], references: [id])
+
+  name       String
+  dosage     String?
+  frequency  String?
+  active     Boolean   @default(true)
+  startedAt  DateTime  @default(now())
+  endedAt    DateTime?
+
+  @@index([patientId])
+}
+
+model Allergy {
+  id         String   @id @default(cuid())
+  patientId  String
+  patient    Patient  @relation(fields: [patientId], references: [id])
+
+  substance  String
+  reaction   String?
+  severity   String?
+
+  @@index([patientId])
+}
+
+model Diagnosis {
+  id         String   @id @default(cuid())
+  patientId  String
+  patient    Patient  @relation(fields: [patientId], references: [id])
+
+  icd10Code  String
+  description String
+  diagnosedAt DateTime @default(now())
+  resolvedAt  DateTime?
+
+  @@index([patientId])
+}
+
+enum PrescriptionStatus {
+  DRAFT
+  SENT
+  ERROR
+  CANCELLED
+}
+
+/// Stub for e-prescribing. This app never transmits a prescription itself —
+/// externalVendorRef points at the record created by a certified
+/// e-prescribing vendor (see lib/prescribing and COMPLIANCE.md).
+model Prescription {
+  id                String             @id @default(cuid())
+
+  patientId         String
+  patient           Patient            @relation(fields: [patientId], references: [id])
+
+  providerId        String
+  provider          Provider           @relation(fields: [providerId], references: [id])
+
+  medicationName    String
+  dosage            String
+  quantity          String
+  directions        String
+  isControlled      Boolean            @default(false)
+
+  status            PrescriptionStatus @default(DRAFT)
+  externalVendorRef String?
+
+  createdAt         DateTime           @default(now())
+
+  @@index([patientId])
+}
+
+enum InvoiceStatus {
+  OPEN
+  PAID
+  FAILED
+  REFUNDED
+  VOID
+}
+
+/// Billing lives structurally apart from clinical tables — an invoice
+/// references an appointment by id only, never clinical content.
+model Invoice {
+  id              String        @id @default(cuid())
+
+  patientId       String
+  patient         Patient       @relation(fields: [patientId], references: [id])
+
+  appointmentId   String?       @unique
+  appointment     Appointment?  @relation(fields: [appointmentId], references: [id])
+
+  amountCents     Int
+  currency        String        @default("usd")
+  status          InvoiceStatus @default(OPEN)
+
+  stripePaymentIntentId String?
+
+  createdAt       DateTime      @default(now())
+  paidAt          DateTime?
+
+  @@index([patientId])
+}
+
+/// Append-only audit trail. Every PHI read/write goes through
+/// lib/audit.ts, which writes here. Nothing in the app updates or deletes
+/// rows in this table.
+model AuditLog {
+  id         String   @id @default(cuid())
+
+  actorId    String
+  actor      User     @relation("AuditActor", fields: [actorId], references: [id])
+
+  action     String   // e.g. "VIEW", "CREATE", "UPDATE", "LOGIN", "LOGIN_FAILED"
+  entityType String   // e.g. "ClinicalNote", "Patient", "Document"
+  entityId   String?
+
+  ipAddress  String?
+  userAgent  String?
+  metadata   Json?
+
+  createdAt  DateTime @default(now())
+
+  @@index([actorId, createdAt])
+  @@index([entityType, entityId])
+}
