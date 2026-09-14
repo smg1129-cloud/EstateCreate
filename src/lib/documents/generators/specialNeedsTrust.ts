@@ -164,6 +164,15 @@ export function generateSpecialNeedsTrust(ctx: IntakeContext): DocumentModel {
   blocks.push(
     clause(undefined, 'The Beneficiary shall not serve as Trustee, and no Trustee shall be a person whom the Beneficiary is legally obligated to support. A Trustee may resign by written notice to the successor Trustee and to the Beneficiary or the Beneficiary’s legal representative.')
   )
+  if (sn?.advocate) {
+    blocks.push(
+      clause(undefined, [
+        `The Grantor designates `,
+        { text: sn.advocate, bold: true },
+        ` to serve as care advocate for the Beneficiary. The care advocate is not a Trustee and holds no power over trust funds, but shall consult with the Trustee regarding the Beneficiary’s needs, living arrangements, and quality of life. The Trustee shall give the care advocate’s recommendations substantial weight.`,
+      ])
+    )
+  }
   blocks.push(clause(undefined, bondClause(ctx)))
 
   // Article VI — Remainder on the Beneficiary's death (no Medicaid payback)
@@ -284,6 +293,16 @@ export function generateSpecialNeedsTrust(ctx: IntakeContext): DocumentModel {
       )
     )
   }
+  if (sn?.hasExistingAbleOrTrust) {
+    flags.push(
+      flag('SNT_EXISTING_VEHICLE', 'caution', 'The beneficiary already has an ABLE account or special needs trust. Coordinate this trust with the existing vehicle to avoid conflicting terms and benefit-eligibility problems.', '42 U.S.C. 1396p; 26 U.S.C. 529A')
+    )
+  }
+  flags.push(
+    sn?.hasLetterOfIntent
+      ? flag('SNT_LETTER_OF_INTENT', 'info', 'The client has a letter of intent describing the beneficiary’s routines, providers, and needs. Confirm it is kept with the trust and updated periodically.')
+      : flag('SNT_NO_LETTER_OF_INTENT', 'info', 'Recommend the client prepare a letter of intent (routines, providers, medications, preferences) to guide the trustee and caregivers — the most valuable non-legal document for a special-needs beneficiary.')
+  )
 
   return {
     type: 'SPECIAL_NEEDS_TRUST',

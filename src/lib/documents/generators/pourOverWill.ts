@@ -25,6 +25,7 @@ import {
 } from './shared'
 import { flag } from '../blocks'
 import { trustName } from './revocableTrust'
+import { dispositionOfRemainsClause } from './commonEstate'
 
 export function generatePourOverWill(ctx: IntakeContext): DocumentModel {
   const blocks: Block[] = []
@@ -100,6 +101,11 @@ export function generatePourOverWill(ctx: IntakeContext): DocumentModel {
       ? 'My Personal Representative shall have full authority over my digital assets, including the content of communications, under Chapter 740, Florida Statutes.'
       : 'My Personal Representative may access and manage my digital assets and close accounts under Chapter 740, Florida Statutes, but not the content of communications.')
   )
+  const disposition = dispositionOfRemainsClause(ctx)
+  if (disposition) blocks.push(disposition)
+  if (ctx.debts.forgiveFamilyLoans) {
+    blocks.push(clause(undefined, 'I forgive any debt owed to me at my death by any of my descendants, and no such debt shall be charged against that person’s share.'))
+  }
   blocks.push(clause(undefined, 'This Will shall be governed by Florida law. A beneficiary who fails to survive me by thirty (30) days is deemed to have predeceased me.'))
 
   // Execution (same self-proving affidavit as the standalone will)

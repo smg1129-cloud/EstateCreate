@@ -4,7 +4,7 @@
 // answers directly, so the mapping lives in exactly one place.
 
 import type { Answers } from '@/lib/questionnaire/types'
-import { bool, rows, str, yesNo, explain } from '@/lib/questionnaire/types'
+import { bool, num, rows, str, yesNo, explain } from '@/lib/questionnaire/types'
 
 export type Pronoun = 'he' | 'she' | 'they'
 
@@ -34,6 +34,7 @@ export interface Fiduciary {
   city?: string
   state?: string
   phone?: string
+  isUSCitizen?: boolean
 }
 
 export interface Child {
@@ -121,6 +122,10 @@ export interface IntakeContext {
     minorPot: 'pot' | 'separate'
     trusteeStandard: 'broad' | 'hems'
     divorceProtection: boolean
+    beneficiaryMayBeTrustee: boolean
+    remainderPOA: 'bloodline' | 'limited' | 'broad'
+    trustProtector: boolean
+    trustProtectorName?: string
   }
 
   specificGifts: SpecificGift[]
@@ -143,11 +148,15 @@ export interface IntakeContext {
     homestead: boolean
     realEstate: RealEstate[]
     accounts: AssetAccount[]
-    lifeInsurance: { company: string; deathBenefit?: number; beneficiary?: string }[]
+    lifeInsurance: { company: string; deathBenefit?: number; beneficiary?: string; owner?: string }[]
     ownsBusiness: boolean
     hasBuySell: boolean
     hasDigitalAssets: boolean
     ownsFirearms: boolean
+    firearmsCount?: number
+    hasNFAItems: boolean
+    nfaDetail?: string
+    firearmsRecipient?: string
   }
 
   minors: {
@@ -160,11 +169,32 @@ export interface IntakeContext {
     beneficiaryName: string
     receivesBenefits: boolean
     trusteeName?: string
+    advocate?: string
+    hasExistingAbleOrTrust: boolean
+    hasLetterOfIntent: boolean
     remainderOnDeath?: string
   }
 
-  pets: { name: string; type?: string; caregiver?: string }[]
+  pets: { name: string; type?: string; caregiver?: string; medical?: string }[]
   petTrustAmount?: number
+  petCare: {
+    enforcer?: string
+    remainder?: string
+    instructions?: string
+  }
+
+  finalArrangements: {
+    disposition?: 'burial' | 'cremation' | 'donation' | 'undecided'
+    location?: string
+    agent?: string
+    instructions?: string
+  }
+
+  debts: {
+    forgiveFamilyLoans: boolean
+    forgiveFamilyLoansDetail?: string
+    paidFromResidue: boolean
+  }
 
   poaPowers: {
     gifting: boolean
@@ -182,6 +212,8 @@ export interface IntakeContext {
     comfortCare: boolean
     organDonation: 'yes_any' | 'yes_transplant' | 'no'
     hipaaRelease?: string
+    specificTreatments?: string
+    dementiaWishes?: string
     wishes?: string
   }
 
@@ -213,6 +245,7 @@ function toFiduciaries(source: ReturnType<typeof rows>): Fiduciary[] {
       city: typeof r.city === 'string' ? r.city : undefined,
       state: typeof r.state === 'string' ? r.state : undefined,
       phone: typeof r.phone === 'string' ? r.phone : undefined,
+      isUSCitizen: r.isUSCitizen === true || r.isUSCitizen === 'true' ? true : r.isUSCitizen === false || r.isUSCitizen === 'false' ? false : undefined,
     }))
     .filter((f) => f.fullName)
 }
@@ -288,6 +321,9 @@ export function buildContext(answers: Answers): IntakeContext {
           beneficiaryName: specialNeedsName,
           receivesBenefits: bool(answers, 'sn.receivesBenefits'),
           trusteeName: str(answers, 'sn.trusteeName') || undefined,
+          advocate: str(answers, 'sn.advocate') || undefined,
+          hasExistingAbleOrTrust: yesNo(answers, 'sn.ableAccount') === 'yes',
+          hasLetterOfIntent: bool(answers, 'sn.letterOfIntent'),
           remainderOnDeath: str(answers, 'sn.remainderOnDeath') || undefined,
         }
       : undefined
@@ -329,6 +365,10 @@ export function buildContext(answers: Answers): IntakeContext {
       minorPot: (str(answers, 'dist.minorPotTrust') as 'pot' | 'separate') || 'pot',
       trusteeStandard: (str(answers, 'dist.trusteeStandard') as 'broad' | 'hems') || 'hems',
       divorceProtection: bool(answers, 'dist.divorceProtection'),
+      beneficiaryMayBeTrustee: bool(answers, 'dist.beneficiaryAsTrustee'),
+      remainderPOA: (str(answers, 'dist.remainderPOA') as 'bloodline' | 'limited' | 'broad') || 'bloodline',
+      trustProtector: bool(answers, 'dist.trustProtector'),
+      trustProtectorName: str(answers, 'fid.trustProtectorName') || undefined,
     },
 
     specificGifts,
@@ -370,12 +410,17 @@ export function buildContext(answers: Answers): IntakeContext {
           company: typeof r.company === 'string' ? r.company : '',
           deathBenefit: toNumber(r.deathBenefit),
           beneficiary: typeof r.beneficiary === 'string' ? r.beneficiary : undefined,
+          owner: typeof r.owner === 'string' ? r.owner : undefined,
         }))
         .filter((r) => r.company),
-      ownsBusiness: yesNo(answers, 'assets.ownsBusiness') === 'yes',
-      hasBuySell: yesNo(answers, 'assets.businessBuySell') === 'yes',
-      hasDigitalAssets: yesNo(answers, 'assets.digitalAssets') === 'yes',
+      ownsBusiness: yesNo(answers, 'assets.ownsBusiness') === 'yes' || bool(answers, 'triage.ownsBusiness'),
+      hasBuySell: yesNo(answers, 'business.buySell') === 'yes' || yesNo(answers, 'assets.businessBuySell') === 'yes',
+      hasDigitalAssets: yesNo(answers, 'assets.digitalAssets') === 'yes' || yesNo(answers, 'assets.crypto') === 'yes',
       ownsFirearms: yesNo(answers, 'assets.firearms') === 'yes',
+      firearmsCount: num(answers, 'assets.firearmsCount'),
+      hasNFAItems: yesNo(answers, 'assets.firearmsNFA') === 'yes',
+      nfaDetail: explain(answers, 'assets.firearmsNFA'),
+      firearmsRecipient: str(answers, 'assets.firearmsRecipient') || undefined,
     },
 
     minors: {
@@ -391,9 +436,28 @@ export function buildContext(answers: Answers): IntakeContext {
         name: typeof r.name === 'string' ? r.name : '',
         type: typeof r.type === 'string' ? r.type : undefined,
         caregiver: typeof r.caregiver === 'string' ? r.caregiver : undefined,
+        medical: typeof r.medical === 'string' ? r.medical : undefined,
       }))
       .filter((p) => p.name),
     petTrustAmount: toNumber(answers['pets.trustAmount']),
+    petCare: {
+      enforcer: str(answers, 'pets.enforcer') || undefined,
+      remainder: str(answers, 'pets.remainder') || undefined,
+      instructions: str(answers, 'pets.instructions') || undefined,
+    },
+
+    finalArrangements: {
+      disposition: (str(answers, 'final.disposition') as IntakeContext['finalArrangements']['disposition']) || undefined,
+      location: str(answers, 'final.location') || undefined,
+      agent: str(answers, 'final.agent') || undefined,
+      instructions: str(answers, 'final.instructions') || undefined,
+    },
+
+    debts: {
+      forgiveFamilyLoans: yesNo(answers, 'debts.familyLoans') === 'yes',
+      forgiveFamilyLoansDetail: explain(answers, 'debts.familyLoans'),
+      paidFromResidue: str(answers, 'debts.howPaid') !== 'with_asset',
+    },
 
     poaPowers: {
       gifting: bool(answers, 'poa.gifting'),
@@ -411,6 +475,8 @@ export function buildContext(answers: Answers): IntakeContext {
       comfortCare: answers['health.comfortCare'] === undefined ? true : bool(answers, 'health.comfortCare'),
       organDonation: (str(answers, 'health.organDonation') as IntakeContext['health']['organDonation']) || 'no',
       hipaaRelease: str(answers, 'health.hipaaRelease') || undefined,
+      specificTreatments: str(answers, 'health.specificTreatments') || undefined,
+      dementiaWishes: str(answers, 'health.dementiaWishes') || undefined,
       wishes: str(answers, 'health.wishes') || undefined,
     },
 

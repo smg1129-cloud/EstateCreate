@@ -147,6 +147,23 @@ export function generateLivingWill(ctx: IntakeContext): DocumentModel {
     clause('4.2', 'It is my intention that this declaration be honored by my family and physicians as the final expression of my legal right to refuse or direct medical or surgical treatment, and I accept the consequences of that decision. I understand the full import of this declaration and am emotionally and mentally competent to make it.')
   )
 
+  // Article V — Additional personal instructions (only if the client gave any).
+  if (ctx.health.specificTreatments || ctx.health.dementiaWishes || ctx.health.wishes) {
+    blocks.push(article('V', 'Additional Instructions', 'art-additional'))
+    blocks.push(
+      clause('5.1', 'The following are my personal instructions and wishes, which I direct be given effect to the extent consistent with the preceding provisions and applicable law:')
+    )
+    if (ctx.health.specificTreatments) {
+      blocks.push(clause('5.2', [bold('Specific treatments. '), ctx.health.specificTreatments]))
+    }
+    if (ctx.health.dementiaWishes) {
+      blocks.push(clause('5.3', [bold('If I develop dementia. '), ctx.health.dementiaWishes]))
+    }
+    if (ctx.health.wishes) {
+      blocks.push(clause('5.4', [bold('Other wishes. '), ctx.health.wishes]))
+    }
+  }
+
   // Execution — two adult witnesses (no notary)
   blocks.push(...executionBlocks(name))
 

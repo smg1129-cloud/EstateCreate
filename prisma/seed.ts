@@ -91,15 +91,18 @@ const INTAKE_ANSWERS: Answers = {
   'dist.minorPotTrust': 'pot',
   'dist.trusteeStandard': 'hems',
   'dist.divorceProtection': true,
+  'dist.remainderPOA': 'bloodline',
+  'dist.trustProtector': true,
 
   'fid.personalRep': [
     { fullName: 'John Alan Carter', relationship: 'spouse', city: 'Jacksonville', state: 'FL' },
     { fullName: 'Margaret Ellis', relationship: 'sister', city: 'Tampa', state: 'FL' },
   ],
   'fid.trustee': [
-    { fullName: 'John Alan Carter', relationship: 'spouse', city: 'Jacksonville', state: 'FL' },
-    { fullName: 'Margaret Ellis', relationship: 'sister', city: 'Tampa', state: 'FL' },
+    { fullName: 'John Alan Carter', relationship: 'spouse', city: 'Jacksonville', state: 'FL', isUSCitizen: true },
+    { fullName: 'Margaret Ellis', relationship: 'sister', city: 'Tampa', state: 'FL', isUSCitizen: true },
   ],
+  'fid.trustProtectorName': 'Margaret Ellis; then First Coast Trust Company',
   'fid.poaAgent': [{ fullName: 'John Alan Carter', relationship: 'spouse', city: 'Jacksonville', state: 'FL' }],
   'fid.surrogate': [{ fullName: 'John Alan Carter', relationship: 'spouse', phone: '904-555-0101' }],
   'fid.guardian': [{ fullName: 'Margaret Ellis', relationship: 'sister', city: 'Tampa', state: 'FL' }],
@@ -125,7 +128,19 @@ const INTAKE_ANSWERS: Answers = {
   'health.hipaaRelease': 'John Alan Carter (husband)\nMargaret Ellis (sister)',
   'health.wishes': 'I would like to be at home if possible.',
 
+  'health.specificTreatments': 'I would accept short-term intubation if recovery is likely, but not indefinite mechanical ventilation.',
+  'health.dementiaWishes': 'If I no longer recognize my family, focus on comfort rather than aggressive treatment.',
+
   'digital.executorAccess': 'full',
+
+  'final.disposition': 'cremation',
+  'final.location': 'Ashes to be scattered at Amelia Island.',
+  'final.agent': 'John Alan Carter',
+  'final.instructions': 'A simple memorial service; no viewing.',
+
+  'protect.tbe': { value: 'yes' },
+  'tax.priorGiftReturns': { value: 'no' },
+  'debts.familyLoans': { value: 'no' },
 
   'existing.hasWill': { value: 'no' },
   'existing.hasTrust': { value: 'no' },

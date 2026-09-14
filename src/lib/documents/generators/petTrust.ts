@@ -60,7 +60,8 @@ export function generatePetTrust(ctx: IntakeContext): DocumentModel {
         pets.map((pet) => {
           const type = pet.type ? ` (${pet.type})` : ''
           const cg = pet.caregiver ? `, to be cared for by ${pet.caregiver}` : ''
-          return [`${pet.name || '[animal name]'}${type}${cg}.`]
+          const med = pet.medical ? ` — special care needs: ${pet.medical}` : ''
+          return [`${pet.name || '[animal name]'}${type}${cg}${med}.`]
         }),
         { ordered: true }
       )
@@ -168,6 +169,14 @@ export function generatePetTrust(ctx: IntakeContext): DocumentModel {
       'No portion of the trust property may be converted to the use of any person or used for any purpose other than the care of the Covered Animals and the payment of the Trustee’s reasonable compensation and the reasonable expenses of administering the trust.'
     )
   )
+  if (ctx.petCare.instructions) {
+    blocks.push(
+      clause('4.4', [
+        'The Grantor’s wishes regarding the care of the Covered Animals, which the Trustee and any Caregiver should observe, are as follows: ',
+        { text: ctx.petCare.instructions, italic: true },
+      ])
+    )
+  }
 
   // Article V — Enforcement.
   blocks.push(article('V', 'Enforcement'))
@@ -178,7 +187,15 @@ export function generatePetTrust(ctx: IntakeContext): DocumentModel {
     ...ctx.fiduciaries.trustees,
   ]
   const enforcer = enforcerPool.length ? enforcerPool[0] : undefined
-  if (enforcer) {
+  if (ctx.petCare.enforcer) {
+    blocks.push(
+      clause('5.1', [
+        'The Grantor appoints ',
+        { text: ctx.petCare.enforcer, bold: true },
+        ' as the person authorized to enforce this trust and to require the Trustee to apply the trust property for the care of the Covered Animals.',
+      ])
+    )
+  } else if (enforcer) {
     blocks.push(
       clause('5.1', [
         'The Grantor appoints ',
@@ -210,7 +227,7 @@ export function generatePetTrust(ctx: IntakeContext): DocumentModel {
   // Article VI — Termination and remainder.
   blocks.push(article('VI', 'Termination and Remainder'))
   blocks.push(clause('6.1', 'This trust terminates upon the death of the last surviving Covered Animal.'))
-  const backstop = ctx.distribution.ultimateBackstop
+  const backstop = ctx.petCare.remainder || ctx.distribution.ultimateBackstop
   if (backstop) {
     blocks.push(
       clause('6.2', [

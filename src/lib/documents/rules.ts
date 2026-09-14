@@ -382,5 +382,99 @@ export function spotIssues(ctx: IntakeContext): ReviewFlag[] {
     )
   }
 
+  // ---- Signals captured by the expanded intake -----------------------------
+  const yn = (id: string): string | undefined => (ctx.raw[id] as { value?: string } | undefined)?.value
+
+  // Module 1 — joint-representation conflict.
+  if (ctx.spouse && yn('spouse.confidential') === 'yes') {
+    flags.push(
+      flag(
+        'CONFIDENTIAL_FROM_SPOUSE',
+        'warning',
+        'Client disclosed something to be kept confidential from the spouse. Joint representation is compromised — resolve the conflict (separate representation / informed consent) before drafting.',
+        'R. Regulating Fla. Bar 4-1.7; Module 1.5'
+      )
+    )
+  }
+
+  // Module 5 — contract to make a will.
+  if (yn('prior.contractToMakeWill') === 'yes') {
+    flags.push(
+      flag(
+        'CONTRACT_TO_DEVISE',
+        'warning',
+        'A prior agreement may require the client to make a will or leave specific property. Such a contract (Fla. Stat. 732.701) can override the new plan — obtain and read it.',
+        'Fla. Stat. 732.701; Module 5.3'
+      )
+    )
+  }
+
+  // Module 6 — advancements.
+  if (yn('family.advancements') === 'yes') {
+    flags.push(
+      flag('ADVANCEMENTS', 'caution', 'Prior lifetime gifts to be charged against a child’s share require a written declaration (Fla. Stat. 732.109). Draft it expressly.', 'Fla. Stat. 732.109')
+    )
+  }
+
+  // Homestead precision — a minor child actually living in the home.
+  if (ctx.assets.ownsHome && ctx.assets.homestead && ctx.raw['assets.minorChildInHome'] === true) {
+    flags.push(
+      flag(
+        'HOMESTEAD_MINOR_IN_HOME',
+        'warning',
+        'A minor child lives in the homestead: the residence generally cannot be devised at all except to the spouse, and passes subject to the minor’s protected interest. Confirm the disposition is valid.',
+        'Art. X, §4(c), Fla. Const.; Fla. Stat. 732.4015'
+      )
+    )
+  }
+
+  // Foreign / community property.
+  if (yn('foreign.foreignRE') === 'yes') {
+    flags.push(flag('FOREIGN_REALTY', 'caution', 'Client owns real estate abroad; a separate will under that country’s law is often required, and forced-heirship rules may apply.', 'Client questionnaire §G-2'))
+  }
+  if (yn('foreign.foreignAccounts') === 'yes') {
+    flags.push(flag('FOREIGN_ACCOUNTS', 'caution', 'Foreign financial accounts carry annual reporting requirements (FBAR / FATCA) with severe penalties. Coordinate with the client’s tax advisor.', 'Client questionnaire §G-3'))
+  }
+  if (yn('foreign.communityProperty') === 'yes') {
+    flags.push(flag('COMMUNITY_PROPERTY', 'caution', 'Property acquired while living in a community-property state may retain that character in Florida. Trace and document it.', 'Fla. Stat. 732.216–.228'))
+  }
+
+  // Business exposure.
+  if (yn('business.personalGuarantee') === 'yes') {
+    flags.push(flag('PERSONAL_GUARANTEE', 'caution', 'Personal guarantees of business debt or leases survive the client and can consume the estate. Quantify the exposure.', 'Client questionnaire §K-9'))
+  }
+  if (yn('business.sCorp') === 'yes') {
+    flags.push(flag('S_CORP', 'caution', 'S-corporation stock may be held only by certain trusts (QSST/ESBT); a defective transfer can terminate the S election. Confirm any trust qualifies.', 'I.R.C. 1361'))
+  }
+
+  // Powers of appointment held by the client.
+  if (yn('expect.powerOfAppointment') === 'yes') {
+    flags.push(flag('POWER_OF_APPOINTMENT', 'caution', 'Client holds a power of appointment over another trust. The will may need to expressly exercise — or expressly decline to exercise — it.', 'Client questionnaire §P-2'))
+  }
+
+  // Asset protection / fraudulent transfer timing.
+  if (yn('protect.recentTransfers') === 'yes') {
+    flags.push(flag('FRAUDULENT_TRANSFER_RISK', 'warning', 'Recent transfers or a threatened claim: transfers made after a claim arises can be undone as fraudulent transfers. Do not move assets before assessing this.', 'Fla. Stat. ch. 726'))
+  }
+  if (ctx.testator.maritalStatus === 'married' && yn('protect.tbe') === 'no') {
+    flags.push(flag('TENANCY_BY_ENTIRETIES', 'info', 'Married client whose home/accounts are not held as tenants by the entireties — TBE titling protects against a creditor of one spouse alone. Consider it.', 'Fla. Stat. 689.115'))
+  }
+
+  // Tax signals.
+  if (yn('tax.priorGiftReturns') === 'yes' || yn('tax.largeGifts') === 'yes') {
+    flags.push(flag('LIFETIME_GIFTS', 'info', 'Client has made reportable lifetime gifts. Obtain prior Forms 709 and track used exclusion for estate-tax and DSUE purposes.', 'I.R.C. 2001, 2505'))
+  }
+  if (yn('tax.expectGrowth') === 'yes') {
+    flags.push(flag('EXPECTED_GROWTH', 'caution', 'Client expects the estate to grow substantially. Revisit tax exposure and consider lifetime gifting / freeze techniques.'))
+  }
+  if (ctx.testator.maritalStatus === 'widowed' && yn('tax.portability') === 'no') {
+    flags.push(flag('PORTABILITY_MISSED', 'warning', 'Widowed client with no portability election filed for the late spouse. A late-election (Rev. Proc. 2022-32) may still be available — confirm.', 'I.R.C. 2010(c); Rev. Proc. 2022-32'))
+  }
+
+  // Special-needs coordination.
+  if (ctx.specialNeeds && yn('sn.otherFamilyGifts') === 'yes') {
+    flags.push(flag('SNT_COORDINATION', 'caution', 'Other family members are leaving money directly to the special-needs beneficiary, which can undo benefits planning. Coordinate all gifts through the SNT.', 'Client questionnaire §V-9'))
+  }
+
   return flags
 }

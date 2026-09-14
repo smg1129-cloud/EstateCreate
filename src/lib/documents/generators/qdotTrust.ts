@@ -95,18 +95,29 @@ export function generateQdotTrust(ctx: IntakeContext): DocumentModel {
   blocks.push(
     clause('2.2', 'No distribution of principal from this trust (other than a distribution described in Section 2056A(b)(3) on account of hardship, or as otherwise permitted by the Treasury Regulations) may be made unless the U.S. Trustee has the right to withhold from the distribution the additional estate tax imposed under Section 2056A(b) on that distribution, and the U.S. Trustee shall withhold and remit that tax as required.')
   )
-  blocks.push(
-    clause('2.3', [
-      `The U.S. Trustee shall be `,
-      { text: '[NAME OF U.S.-CITIZEN INDIVIDUAL OR DOMESTIC CORPORATE TRUSTEE — attorney to confirm]', italic: true },
-      `. If the individuals nominated below are not confirmed to satisfy the U.S. Trustee requirement, the attorney must designate a qualifying U.S. Trustee before execution.`,
-    ])
-  )
-  blocks.push({
-    kind: 'fillIn',
-    label: 'U.S. Trustee (U.S. citizen or domestic corporation)',
-    note: 'Required by I.R.C. 2056A(a)(1). Confirm and insert a qualifying trustee; the intake does not capture trustee citizenship.',
-  })
+  const usTrustee = trustees.find((t) => t.isUSCitizen === true)
+  if (usTrustee) {
+    blocks.push(
+      clause('2.3', [
+        `The U.S. Trustee shall be `,
+        { text: usTrustee.fullName, bold: true },
+        `, who the Grantor represents is a citizen of the United States. If that individual ceases to serve, at least one successor Trustee who is a U.S. citizen or a domestic corporation authorized to act as a fiduciary must at all times be serving.`,
+      ])
+    )
+  } else {
+    blocks.push(
+      clause('2.3', [
+        `The U.S. Trustee shall be `,
+        { text: '[NAME OF U.S.-CITIZEN INDIVIDUAL OR DOMESTIC CORPORATE TRUSTEE — attorney to confirm]', italic: true },
+        `. None of the trustees named below was confirmed to be a U.S. citizen, so the attorney must designate a qualifying U.S. Trustee before execution.`,
+      ])
+    )
+    blocks.push({
+      kind: 'fillIn',
+      label: 'U.S. Trustee (U.S. citizen or domestic corporation)',
+      note: 'Required by I.R.C. 2056A(a)(1). No nominated trustee was marked as a U.S. citizen in the intake.',
+    })
+  }
 
   // Article III — Income and principal
   blocks.push(article('III', 'Distributions'))
@@ -185,12 +196,19 @@ export function generateQdotTrust(ctx: IntakeContext): DocumentModel {
 
   // Flags
   flags.push(
-    flag(
-      'US_TRUSTEE_REQUIRED',
-      'warning',
-      'A QDOT MUST have at least one trustee that is a U.S. citizen or a domestic corporation authorized to act as a fiduciary, with the power to withhold the deferred estate tax on principal distributions. The intake does not capture trustee citizenship, so confirm and designate a qualifying U.S. Trustee before execution.',
-      'I.R.C. 2056A(a)(1); Treas. Reg. 20.2056A-2'
-    )
+    usTrustee
+      ? flag(
+          'US_TRUSTEE_CONFIRM',
+          'caution',
+          `Trustee "${usTrustee.fullName}" was marked a U.S. citizen and is designated the U.S. Trustee. Confirm citizenship and that this trustee holds the power to withhold the deferred estate tax on principal distributions.`,
+          'I.R.C. 2056A(a)(1); Treas. Reg. 20.2056A-2'
+        )
+      : flag(
+          'US_TRUSTEE_REQUIRED',
+          'warning',
+          'A QDOT MUST have at least one trustee that is a U.S. citizen or a domestic corporation authorized to act as a fiduciary, with the power to withhold the deferred estate tax on principal distributions. No nominated trustee was marked as a U.S. citizen — designate a qualifying U.S. Trustee before execution.',
+          'I.R.C. 2056A(a)(1); Treas. Reg. 20.2056A-2'
+        )
   )
   flags.push(
     flag(

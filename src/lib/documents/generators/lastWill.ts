@@ -31,7 +31,7 @@ import {
   successionSentence,
   willExecution,
 } from './shared'
-import { residuaryDispositionBlocks, contingentTrustArticle, fiduciaryPowersClauses } from './commonEstate'
+import { residuaryDispositionBlocks, contingentTrustArticle, fiduciaryPowersClauses, dispositionOfRemainsClause } from './commonEstate'
 
 export function generateLastWill(ctx: IntakeContext): DocumentModel {
   const blocks: Block[] = []
@@ -89,6 +89,14 @@ export function generateLastWill(ctx: IntakeContext): DocumentModel {
       'All estate, inheritance, and similar death taxes payable by reason of my death shall be paid out of the residue of my estate, without apportionment and without a right of reimbursement from any person.'
     )
   )
+  if (ctx.debts.forgiveFamilyLoans) {
+    blocks.push(
+      clause('2.3', [
+        'I forgive and cancel any debt or loan owed to me at my death by any of my descendants, and I direct that no such debt be charged against that person’s share of my estate.',
+        ctx.debts.forgiveFamilyLoansDetail ? ` Specifically: ${ctx.debts.forgiveFamilyLoansDetail}.` : '',
+      ])
+    )
+  }
 
   // Article III — Tangible personal property + specific gifts
   blocks.push(article('III', 'Tangible Personal Property and Specific Gifts', 'art-gifts'))
@@ -154,6 +162,8 @@ export function generateLastWill(ctx: IntakeContext): DocumentModel {
 
   // Machinery article
   blocks.push(article(roman(nextArticle), 'General Provisions', 'art-general'))
+  const disposition = dispositionOfRemainsClause(ctx)
+  if (disposition) blocks.push(disposition)
   blocks.push(
     clause(
       undefined,

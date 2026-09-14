@@ -200,9 +200,36 @@ export function contingentTrustArticle(ctx: IntakeContext, articleLabel: string)
     ])
   )
 
+  // Power of appointment over the remainder (from dist.remainderPOA).
+  if (ctx.distribution.remainderPOA === 'limited') {
+    blocks.push(
+      clause(undefined, 'Limited power of appointment. Each beneficiary may, by a will or trust that expressly refers to this power, appoint the balance of the beneficiary’s trust among my descendants and one or more charitable organizations. To the extent the power is not effectively exercised, the balance passes as provided above.')
+    )
+  } else if (ctx.distribution.remainderPOA === 'broad') {
+    blocks.push(
+      clause(undefined, 'General power of appointment. Each beneficiary may, by a will or trust that expressly refers to this power, appoint the balance of the beneficiary’s trust to any person or entity, including the beneficiary’s own estate. To the extent the power is not effectively exercised, the balance passes as provided above.')
+    )
+  }
+
+  // Trust protector (from dist.trustProtector).
+  if (ctx.distribution.trustProtector) {
+    const protectorName = ctx.distribution.trustProtectorName
+    blocks.push(
+      clause(undefined, [
+        `Trust protector. I appoint `,
+        protectorName ? { text: protectorName, bold: true } : { text: '[trust protector — attorney to confirm]', italic: true },
+        ` to serve as trust protector. The trust protector, acting in a fiduciary capacity and by signed writing, may: (a) remove and replace any Trustee and appoint successor Trustees; (b) amend the administrative (but not the dispositive) provisions of any trust to correct drafting errors or to conform to changes in the law; and (c) change the trust’s situs and governing law. The trust protector is not required to account and may resign by written notice.`,
+      ])
+    )
+  }
+
   // Small trust / trustee-as-beneficiary limits
   blocks.push(
-    clause(undefined, 'If at any time a trust becomes uneconomical to administer, the Trustee may terminate it and distribute the remaining assets to the beneficiary for whom it is held. Any Trustee who is also a beneficiary may not participate in decisions to distribute to that Trustee except under an ascertainable (HEMS) standard.')
+    clause(undefined, `If at any time a trust becomes uneconomical to administer, the Trustee may terminate it and distribute the remaining assets to the beneficiary for whom it is held. Any Trustee who is also a beneficiary may not participate in decisions to distribute to that Trustee except under an ascertainable (HEMS) standard.${
+      ctx.distribution.beneficiaryMayBeTrustee
+        ? ' Upon reaching the age of thirty-five (35) years, a beneficiary may serve as a Trustee of the beneficiary’s own trust, subject to the foregoing limitation.'
+        : ''
+    }`)
   )
 
   return blocks
@@ -257,4 +284,30 @@ export function fiduciaryPowersClauses(ctx: IntakeContext, opts: PowerOptions): 
   }
   blocks.push({ kind: 'list', ordered: true, items: powers.map((p) => [p]) })
   return blocks
+}
+
+/** Non-binding disposition-of-remains / funeral wishes clause built from the
+ * client's final-arrangements answers. Returns null when nothing was provided.
+ * In Florida these wishes guide, but do not bind, the person with authority
+ * over the remains (Fla. Stat. 497.005). */
+export function dispositionOfRemainsClause(ctx: IntakeContext): Block | null {
+  const fa = ctx.finalArrangements
+  const hasAny = (fa.disposition && fa.disposition !== 'undecided') || fa.location || fa.agent || fa.instructions
+  if (!hasAny) return null
+
+  const dispositionWord: Record<string, string> = {
+    burial: 'that my remains be buried',
+    cremation: 'that my remains be cremated',
+    donation: 'that my body be donated to medical science or an accredited institution',
+    undecided: '',
+  }
+  const parts: string[] = ['Disposition of remains. It is my wish, though not a binding direction, ']
+  const pieces: string[] = []
+  if (fa.disposition && dispositionWord[fa.disposition]) pieces.push(dispositionWord[fa.disposition]!)
+  if (fa.location) pieces.push(`at or in ${fa.location}`)
+  const sentence = pieces.length ? parts[0]! + pieces.join(', ') + '.' : parts[0]! + 'that my remains be handled as my family and personal representative determine.'
+  const runs = [sentence]
+  if (fa.agent) runs.push(` I request that ${fa.agent} have the authority to direct the disposition of my remains and my funeral arrangements.`)
+  if (fa.instructions) runs.push(` Additional wishes: ${fa.instructions}`)
+  return clause(undefined, runs)
 }

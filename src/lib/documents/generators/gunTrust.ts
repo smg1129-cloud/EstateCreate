@@ -182,7 +182,9 @@ export function generateGunTrust(ctx: IntakeContext): DocumentModel {
     )
   )
 
-  // Schedule A — firearm inventory (blank; intake has no inventory).
+  // Schedule A — firearm inventory. Intake captures an approximate count and
+  // whether NFA items are involved, but not a per-firearm inventory, so we size
+  // the blank rows to the stated count and note the NFA detail.
   blocks.push({ kind: 'pageBreak' })
   blocks.push({ kind: 'heading', level: 1, text: 'Schedule A — Firearms Held in Trust' })
   blocks.push(
@@ -190,7 +192,12 @@ export function generateGunTrust(ctx: IntakeContext): DocumentModel {
       'List each firearm transferred to or held by this trust. For each firearm, include the make, model, type, caliber or gauge, and serial number. For any NFA Firearm, identify it as such and note the applicable ATF form and approval. Additional firearms may be added by supplementing this Schedule.'
     )
   )
-  for (let i = 1; i <= 5; i++) {
+  if (ctx.assets.nfaDetail) {
+    blocks.push(para([{ text: 'Client-reported NFA items: ', bold: true }, ctx.assets.nfaDetail]))
+  }
+  const count = ctx.assets.firearmsCount
+  const rowCount = Math.min(Math.max(count && count > 0 ? count : 5, 3), 20)
+  for (let i = 1; i <= rowCount; i++) {
     blocks.push({
       kind: 'fillIn',
       label: `Firearm ${i}`,
@@ -253,11 +260,30 @@ export function generateGunTrust(ctx: IntakeContext): DocumentModel {
       '26 U.S.C. ch. 53; 27 C.F.R. Parts 478, 479'
     )
   )
+  if (ctx.assets.hasNFAItems) {
+    flags.push(
+      flag(
+        'NFA_ITEMS_PRESENT',
+        'warning',
+        `Client indicated NFA item(s)${ctx.assets.nfaDetail ? ` — "${ctx.assets.nfaDetail}"` : ''}. A trust is strongly indicated; each item requires ATF transfer approval, and the trust must be finalized before any NFA acquisition (Form 1) or transfer (Form 4).`,
+        '26 U.S.C. ch. 53'
+      )
+    )
+  }
+  if (ctx.assets.firearmsRecipient) {
+    flags.push(
+      flag(
+        'FIREARMS_RECIPIENT',
+        'info',
+        `Client’s stated intended recipient of the firearms: "${ctx.assets.firearmsRecipient}". Confirm that person is legally eligible to possess each firearm (and any NFA item) before distribution.`
+      )
+    )
+  }
   flags.push(
     flag(
       'SCHEDULE_A_INVENTORY',
       'caution',
-      'The firearm inventory on Schedule A is left blank because the intake captured only whether the client owns firearms, not an itemized list. Complete Schedule A, and confirm the treatment of any NFA items, with the attorney before funding the trust.',
+      `Complete the Schedule A firearm inventory${ctx.assets.firearmsCount ? ` (client reported approximately ${ctx.assets.firearmsCount})` : ''} and confirm the treatment of any NFA items with the attorney before funding the trust.`,
       'Attorney checklist — firearms inventory'
     )
   )
