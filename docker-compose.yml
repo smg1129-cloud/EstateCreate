@@ -1,15 +1,16 @@
 version: '3.8'
 
-# Local development only. In production this maps to AWS RDS for
-# PostgreSQL (HIPAA-eligible with a signed BAA) — see COMPLIANCE.md.
+# Local development only. In production this maps to a managed, encrypted-at-
+# rest PostgreSQL instance under an appropriate data-processing agreement —
+# see COMPLIANCE.md.
 services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: telehealth
-      POSTGRES_PASSWORD: telehealth_dev_password
-      POSTGRES_DB: telehealth_clinic
+      POSTGRES_USER: estatecreate
+      POSTGRES_PASSWORD: estatecreate_dev_password
+      POSTGRES_DB: estatecreate
     ports:
       - '5432:5432'
     volumes:

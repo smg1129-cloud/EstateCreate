@@ -5,17 +5,18 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
+        // Deep navy — a serious, trust-forward palette for a law-firm product.
         brand: {
-          50: '#f0f9f6',
-          100: '#d9efe6',
-          200: '#b3dfce',
-          300: '#82c8ae',
-          400: '#54ab8c',
-          500: '#358f71',
-          600: '#26735b',
-          700: '#215c4a',
-          800: '#1d4a3d',
-          900: '#193e34',
+          50: '#eef2f9',
+          100: '#d6e0ef',
+          200: '#adc1df',
+          300: '#7f9ccb',
+          400: '#5478b4',
+          500: '#3a5c98',
+          600: '#2d477a',
+          700: '#263a63',
+          800: '#1f2f4f',
+          900: '#152238',
         },
       },
     },

@@ -1,107 +1,85 @@
-# Compliance Status
+# Compliance & Practice Status
 
-This document tracks what's implemented in code versus what requires
-operational or legal action before this platform can handle a real
-patient's data. It is not legal advice, and it does not make this
-application HIPAA-compliant by itself — compliance is an organizational
-posture (policies, training, contracts, audits), not a property of source
-code.
+This document tracks what EstateCreate implements in code versus what
+requires professional judgment, firm policy, or legal/operational action
+before it prepares a real client's estate plan. It is not legal advice, and
+running this software does not by itself make the service compliant —
+compliance here is an organizational and professional-responsibility
+posture, not a property of source code.
 
 ## What's implemented in code
 
-- **Access control**: role-based access (`src/lib/rbac.ts`) enforced at
-  both the route level (`src/middleware.ts`) and the data-access level
-  (every clinical query goes through an RBAC check first). CRM (leads,
-  communications) and ERM (clinical notes, medications, diagnoses,
-  prescriptions) are scoped to different roles — staff cannot read clinical
-  content; clinicians only see patients they have an appointment
-  relationship with.
-- **Audit logging**: `src/lib/audit.ts` writes an append-only `AuditLog`
-  row for every login, PHI view, and PHI mutation. Nothing in the app
-  updates or deletes audit rows. Viewable at `/admin/audit-log`.
-- **Authentication**: bcrypt-hashed passwords, mandatory TOTP MFA for
-  staff/clinician/admin roles (`src/lib/auth.ts`, `/mfa/setup`), short
-  role-aware idle-session timeout enforced in `src/middleware.ts`.
-- **Consent capture**: privacy notice, telehealth consent, terms of
-  service, and financial responsibility acknowledgments are recorded with
-  a version and timestamp before any clinical activity
-  (`ConsentRecord` in `prisma/schema.prisma`).
-- **Licensure enforcement**: the booking flow (`src/app/(marketing)/book`)
-  only offers providers holding an active, unexpired license in the
-  patient's stated state, and re-validates that server-side at submission
-  time, not just in the UI.
-- **Encryption in transit**: HSTS and related security headers on every
-  response (`next.config.js`).
-- **Field-level encryption**: MFA secrets are encrypted at the application
-  layer before storage (`src/lib/encryption.ts`), in addition to whatever
-  storage-level encryption the hosting environment provides.
-- **PCI scope reduction**: payments go through Stripe Checkout — this
-  server never receives raw card numbers (`src/lib/payments`).
-- **No self-built e-prescribing transmission**: `src/lib/prescribing` is an
-  adapter interface with a mock implementation only. See below.
+- **Deterministic document assembly (no LLM).** Documents are built by a
+  coded engine (`src/lib/documents`) from a fixed clause library. For a
+  given set of answers the output is identical every time, is stored as a
+  structured model, is content-hashed, and is fully reproducible and
+  diffable. No generative AI is used to draft legal documents.
+- **Attorney-review gate.** A generated document cannot be downloaded by the
+  client or sent for signature until an **attorney** has approved that exact
+  version. This is enforced in the data-access/service layer
+  (`src/lib/matters/service.ts`, `src/lib/rbac.ts`), not just hidden in the
+  UI. Paralegals may prepare and request changes but cannot approve.
+- **Issue-spotting.** The rules engine (`src/lib/documents/rules.ts`)
+  attaches attorney-facing flags derived from the firm's 36-module attorney
+  checklist (elective share, homestead devise restrictions, non-citizen
+  spouse/QDOT, ancillary probate, prior-marriage obligations, PR
+  qualification, special-needs eligibility, and more), each with a statutory
+  anchor. Flags are shown only to the reviewing attorney, never the client.
+- **Access control.** Role-based access (CLIENT / PARALEGAL / ATTORNEY /
+  ADMIN) enforced at the route level (`src/middleware.ts`) and the
+  data-access level (every matter/document read goes through an RBAC check).
+  Clients can see only their own matter.
+- **Audit logging.** `src/lib/audit.ts` writes an append-only `AuditLog` row
+  for logins, consent, intake submission, generation, each review decision,
+  downloads, and signing. Nothing in the app updates or deletes audit rows.
+- **Authentication.** bcrypt-hashed passwords; mandatory TOTP MFA for staff
+  roles; short, role-aware idle-session timeout in middleware.
+- **Consent capture.** Terms, privacy, and electronic-records (E-SIGN/UETA)
+  consents are recorded with a version and timestamp at registration
+  (`ConsentRecord`), append-only.
+- **Field encryption.** Especially sensitive fields (MFA secrets) are
+  encrypted at the application layer (`src/lib/encryption.ts`) on top of
+  storage-level encryption.
+- **Execution requirements surfaced.** Each document carries its Florida
+  execution requirements (witnesses, notary) and step-by-step instructions.
 
-## What is NOT implemented — and can't be, from code alone
+## What code alone does NOT provide
 
-### 1. Business Associate Agreements (BAAs)
-Before any real PHI flows through this system, a signed BAA is required
-with every vendor that could touch it: the cloud host (AWS), the video
-vendor (Daily.co, if used), the payment processor (Stripe, if used for
-anything beyond payment-only data), and any e-prescribing vendor. No BAA
-is in place today — this is a contract, not a config flag.
+- **The practice of law / UPL.** An attorney-review gate exists, but the
+  firm must ensure a licensed Florida attorney genuinely reviews each plan,
+  that the engagement scope is clear, and that the automated intake does not
+  cross into unauthorized practice. Engagement letters, conflict checks, and
+  capacity/undue-influence screening (attorney-checklist Modules 1–2) are
+  professional steps, not code.
+- **Legal accuracy for the specific client.** The clause library reflects
+  Florida and federal law as of the engine version and must be reviewed and
+  kept current by an attorney. Statutory citations in the flags are research
+  anchors, not substitutes for research. Verify every citation and dollar
+  figure (e.g. the federal basic exclusion and summary-administration
+  threshold) against the current statute.
+- **Valid execution.** A document is not effective until executed with the
+  required Florida formalities. Remote online notarization
+  (Fla. Stat. 117.201 et seq.) and electronic wills
+  (Fla. Stat. 732.521–.525, incl. qualified-custodian and vulnerable-adult
+  rules) impose strict requirements; the RON vendor and workflow must be
+  confirmed before any real execution. The mock adapter must never be used
+  for a real document.
+- **Trust funding.** A revocable trust does nothing until funded. Retitling
+  deeds and updating beneficiary designations is a legal/operational step
+  that must be scoped and performed — the engine flags it but cannot do it.
+- **Data protection posture.** This database holds privileged client
+  information. Production requires encryption at rest under an appropriate
+  agreement, secure secret management (KMS rather than plain env vars),
+  backups, and a records-retention policy with legal sign-off.
+- **Multi-state / edge cases.** The engine targets Florida-domiciled
+  clients. Out-of-state property, non-citizen status, community-property
+  history, and similar issues are flagged for the attorney but require
+  individualized handling.
 
-### 2. HIPAA Security Risk Assessment
-A formal, documented risk assessment (45 CFR §164.308(a)(1)) covering the
-actual production infrastructure, workforce access, and physical
-safeguards has not been performed. This needs to happen before go-live and
-periodically thereafter.
+## Adapters that are stubs
 
-### 3. E-prescribing
-`src/lib/prescribing` only ships a mock adapter. Real e-prescribing —
-especially of controlled substances (EPCS, 21 CFR Part 1311) — requires
-integrating a DEA-audited, certified third-party vendor (e.g. DoseSpot,
-NewCrop). This cannot be self-built or self-certified. Do not enable
-prescribing for real patients until that integration exists and the
-vendor's certification covers your use case.
-
-### 4. State-by-state telehealth practice law
-Provider licensure is tracked and enforced technically (`ProviderLicense`
-model, booking-flow check), but the underlying legal questions — informed
-consent requirements, prescribing limits, corporate practice of medicine
-restrictions, cross-state coverage rules — vary by state and need review
-by healthcare counsel licensed in each state you operate in.
-
-### 5. Notice of Privacy Practices / Terms of Service
-The `/privacy` and `/terms` pages contain clearly-marked placeholder text.
-They must be drafted or reviewed by counsel before a real patient signs
-them.
-
-### 6. Breach notification procedure
-The audit log gives you the data needed to investigate a suspected
-breach, but there is no automated breach-detection or the required
-notification workflow (45 CFR §164.400 et seq.) implemented — that's a
-procedural/operational commitment, not a feature to toggle on.
-
-### 7. Workforce training, physical safeguards, device policy
-Entirely outside the codebase: who is trained on PHI handling, how
-workstations are secured, mobile device policy, sanctions policy for
-violations, etc.
-
-### 8. Data retention and disposal policy
-Clinical records are never hard-deleted in this schema (by design — see
-comments in `prisma/schema.prisma`), but the actual retention period
-(commonly 6–10 years, longer for minors, and state-dependent) and secure
-disposal procedure need to be defined with counsel and then encoded
-operationally (backup lifecycle, RDS snapshot retention, etc.).
-
-### 9. Accessibility audit
-Pages are built with semantic HTML and visible focus states as a
-starting point, but no formal WCAG 2.1 AA audit has been performed.
-
-## Before this touches a real patient
-
-At minimum: signed BAAs with every PHI-touching vendor → HIPAA Security
-Risk Assessment → legal review of consent/ToS/privacy copy and
-state-specific telehealth rules → a contracted certified e-prescribing
-vendor (if prescribing is in scope) → workforce policies and training →
-accessibility audit → penetration test / security review of the deployed
-(not just local) environment.
+- **E-signature / RON** (`src/lib/esign`): interface + mock only. No real
+  provider is wired.
+- **Document storage** (`src/lib/storage`): local filesystem adapter for
+  development; an encrypted object-store (S3 + SSE-KMS) adapter is required
+  for production.

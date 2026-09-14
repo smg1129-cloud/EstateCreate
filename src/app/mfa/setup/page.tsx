@@ -1,109 +1,83 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { useSession } from 'next-auth/react'
+import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-
-const ROLE_HOME: Record<string, string> = {
-  PATIENT: '/portal',
-  STAFF: '/staff',
-  CLINICIAN: '/clinician',
-  ADMIN: '/admin',
-}
+import { useSession } from 'next-auth/react'
 
 export default function MfaSetupPage() {
-  const { data: session, update } = useSession()
   const router = useRouter()
-
-  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null)
-  const [secret, setSecret] = useState<string | null>(null)
+  const { update } = useSession()
+  const [qr, setQr] = useState<string | null>(null)
+  const [otpauth, setOtpauth] = useState<string>('')
   const [code, setCode] = useState('')
-  const [error, setError] = useState<string | null>(null)
-  const [verifying, setVerifying] = useState(false)
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
 
-  useEffect(() => {
-    fetch('/api/mfa/setup', { method: 'POST' })
-      .then((r) => r.json())
-      .then((data) => {
-        setQrDataUrl(data.qrDataUrl)
-        setSecret(data.secret)
-      })
-  }, [])
+  async function begin() {
+    setLoading(true)
+    setError('')
+    const res = await fetch('/api/mfa/setup', { method: 'POST' })
+    setLoading(false)
+    if (!res.ok) {
+      setError('Could not start enrollment.')
+      return
+    }
+    const data = await res.json()
+    setQr(data.qrDataUrl)
+    setOtpauth(data.otpauth)
+  }
 
-  async function handleVerify(e: React.FormEvent) {
+  async function verify(e: React.FormEvent) {
     e.preventDefault()
-    setVerifying(true)
-    setError(null)
-
+    setLoading(true)
+    setError('')
     const res = await fetch('/api/mfa/verify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code }),
     })
-
-    setVerifying(false)
-
+    setLoading(false)
     if (!res.ok) {
-      setError('That code did not match. Check your app and try again.')
+      setError('That code was not valid. Try again.')
       return
     }
-
-    await update()
-    const role = session?.user?.role ?? 'PATIENT'
-    router.push(ROLE_HOME[role] ?? '/')
+    await update({ requiresMfaSetup: false })
+    router.push('/attorney')
     router.refresh()
   }
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-4">
-      <h1 className="mb-1 text-2xl font-semibold text-gray-900">Set up multi-factor authentication</h1>
-      <p className="mb-6 text-sm text-gray-600">
-        Staff, clinician, and admin accounts require MFA before continuing. Scan this QR code with an
-        authenticator app (e.g. Google Authenticator, 1Password, Authy).
-      </p>
-
-      {qrDataUrl ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={qrDataUrl} alt="Scan this QR code with your authenticator app" className="mb-4 h-48 w-48" />
-      ) : (
-        <p className="mb-4 text-sm text-gray-500">Generating your setup code…</p>
-      )}
-
-      {secret && (
-        <p className="mb-6 break-all rounded-md bg-gray-50 px-3 py-2 font-mono text-xs text-gray-600">
-          Can&apos;t scan? Enter this key manually: {secret}
+    <div className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-4 py-10">
+      <div className="rounded-lg border border-gray-100 bg-white p-8 shadow-sm">
+        <h1 className="text-xl font-bold text-gray-900">Set up two-factor authentication</h1>
+        <p className="mt-2 text-sm text-gray-600">
+          Staff accounts must use an authenticator app. This protects the privileged client information in every
+          matter.
         </p>
-      )}
 
-      {error && (
-        <p role="alert" className="mb-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-800">
-          {error}
-        </p>
-      )}
-
-      <form onSubmit={handleVerify} className="space-y-4">
-        <div>
-          <label htmlFor="code" className="block text-sm font-medium text-gray-700">
-            Enter the 6-digit code from your app
-          </label>
-          <input
-            id="code"
-            type="text"
-            inputMode="numeric"
-            required
-            value={code}
-            onChange={(e) => setCode(e.target.value)}
-            className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2"
-          />
-        </div>
-        <button
-          type="submit"
-          disabled={verifying}
-          className="w-full rounded-md bg-brand-600 px-4 py-2 font-medium text-white hover:bg-brand-700 disabled:opacity-60"
-        >
-          {verifying ? 'Verifying…' : 'Enable MFA and continue'}
-        </button>
-      </form>
-    </main>
+        {!qr ? (
+          <button onClick={begin} disabled={loading}
+            className="mt-6 w-full rounded-md bg-brand-600 px-4 py-2 font-medium text-white hover:bg-brand-700 disabled:opacity-50">
+            {loading ? 'Preparing…' : 'Begin enrollment'}
+          </button>
+        ) : (
+          <div className="mt-6 space-y-4">
+            <p className="text-sm text-gray-600">Scan this with Google Authenticator, Authy, or 1Password:</p>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={qr} alt="TOTP QR code" className="mx-auto h-44 w-44" />
+            <p className="break-all text-center text-xs text-gray-400">{otpauth}</p>
+            <form onSubmit={verify} className="space-y-3">
+              <input inputMode="numeric" value={code} onChange={(e) => setCode(e.target.value)}
+                placeholder="6-digit code" className="w-full rounded-md border border-gray-300 px-3 py-2 text-center tracking-widest" />
+              <button type="submit" disabled={loading}
+                className="w-full rounded-md bg-brand-600 px-4 py-2 font-medium text-white hover:bg-brand-700 disabled:opacity-50">
+                {loading ? 'Verifying…' : 'Verify & finish'}
+              </button>
+            </form>
+          </div>
+        )}
+        {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+      </div>
+    </div>
   )
 }

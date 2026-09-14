@@ -14,69 +14,81 @@ export interface ActorUser {
   organizationId: string
 }
 
-/// Route/server-action guard. Throws if the actor's role isn't in the
-/// allowed set. This is the primary enforcement point — UI-level hiding of
-/// links/buttons is a UX nicety, never the actual access control.
+/// Route/server-action guard. Throws if the actor's role isn't in the allowed
+/// set. This is the primary enforcement point — UI-level hiding of links and
+/// buttons is a UX nicety, never the actual access control.
 export function requireRole(actor: ActorUser | null, allowed: Role[]): ActorUser {
   if (!actor) throw new ForbiddenError('Not authenticated')
   if (!allowed.includes(actor.role)) throw new ForbiddenError(`Role ${actor.role} not permitted`)
   return actor
 }
 
-/// "Minimum necessary" scoping for clinical (ERM) data: a CLINICIAN may
-/// access a patient's chart only if they have (or have had) an appointment
-/// with that patient. A PATIENT may only access their own chart. STAFF
-/// cannot access clinical content at all — CRM access is separate (see
-/// canAccessCrm). ADMIN can manage users/licenses/audit logs but is
-/// intentionally NOT granted blanket clinical-record access.
-export async function canAccessPatientChart(
-  actor: ActorUser,
-  patientId: string
-): Promise<boolean> {
-  if (actor.role === 'PATIENT') {
-    const patient = await db.patient.findUnique({ where: { id: patientId }, select: { userId: true } })
-    return patient?.userId === actor.id
-  }
-
-  if (actor.role === 'CLINICIAN') {
-    const provider = await db.provider.findUnique({ where: { userId: actor.id }, select: { id: true } })
-    if (!provider) return false
-    const hasRelationship = await db.appointment.findFirst({
-      where: { providerId: provider.id, patientId },
-      select: { id: true },
-    })
-    return Boolean(hasRelationship)
-  }
-
-  return false
+/// Staff-side roles (everyone except the client).
+export function isStaff(actor: ActorUser): boolean {
+  return actor.role === 'ATTORNEY' || actor.role === 'PARALEGAL' || actor.role === 'ADMIN'
 }
 
-export async function assertCanAccessPatientChart(actor: ActorUser, patientId: string): Promise<void> {
-  const allowed = await canAccessPatientChart(actor, patientId)
-  if (!allowed) throw new ForbiddenError('Not authorized to view this patient chart')
+/// A client may only see their own matter; staff in the same organization may
+/// see any matter in the org. Attorneys/paralegals work the queue, so we do
+/// not require pre-assignment to *view* — but only an ATTORNEY may approve
+/// (see canApproveDocuments) and assignment is recorded for accountability.
+export async function canAccessMatter(actor: ActorUser, matterId: string): Promise<boolean> {
+  const matter = await db.estateMatter.findUnique({
+    where: { id: matterId },
+    select: { clientId: true, organizationId: true },
+  })
+  if (!matter) return false
+
+  if (actor.role === 'CLIENT') {
+    return matter.clientId === actor.id
+  }
+  // Staff are scoped to their organization.
+  return isStaff(actor) && matter.organizationId === actor.organizationId
 }
 
-/// CRM access (leads, communications, non-clinical patient directory
-/// fields): STAFF and ADMIN within the same organization. Clinicians use
-/// the ERM, not the CRM, for patient-facing work.
-export function canAccessCrm(actor: ActorUser): boolean {
-  return actor.role === 'STAFF' || actor.role === 'ADMIN'
+export async function assertCanAccessMatter(actor: ActorUser, matterId: string): Promise<void> {
+  const allowed = await canAccessMatter(actor, matterId)
+  if (!allowed) throw new ForbiddenError('Not authorized to access this matter')
+}
+
+/// Only a licensed attorney may approve a generated document or send it for
+/// signature. Paralegals prepare and can request changes; clients never
+/// approve their own documents.
+export function canApproveDocuments(actor: ActorUser): boolean {
+  return actor.role === 'ATTORNEY'
+}
+
+/// Who can work the staff-side review queue at all.
+export function canReviewMatters(actor: ActorUser): boolean {
+  return actor.role === 'ATTORNEY' || actor.role === 'PARALEGAL' || actor.role === 'ADMIN'
 }
 
 export function canAccessAdmin(actor: ActorUser): boolean {
   return actor.role === 'ADMIN'
 }
 
-/// Roles that must complete MFA enrollment before reaching any
-/// role-specific screen (see src/lib/auth.ts and /mfa/setup).
+/// Roles that must complete MFA enrollment before reaching any role-specific
+/// screen (see src/lib/auth.ts and /mfa/setup). Clients are exempt.
 export function requiresMfa(role: Role): boolean {
-  return role === 'STAFF' || role === 'CLINICIAN' || role === 'ADMIN'
+  return role === 'ATTORNEY' || role === 'PARALEGAL' || role === 'ADMIN'
 }
 
-/// Idle-session timeout in minutes for a given role. Clinical/admin roles
-/// get a much shorter window than patients — a shared/shared-adjacent
-/// workstation is a realistic threat model for clinic staff.
+/// Idle-session timeout in minutes for a given role. Staff roles (which can
+/// see privileged client information across many matters) get a much shorter
+/// window than a client viewing their own file.
 export function idleTimeoutMinutesFor(role: Role): number {
   const configured = Number(process.env.SESSION_IDLE_TIMEOUT_MINUTES ?? 15)
-  return role === 'PATIENT' ? Math.max(configured, 30) : configured
+  return role === 'CLIENT' ? Math.max(configured, 30) : configured
+}
+
+export function roleHomeFor(role: Role): string {
+  switch (role) {
+    case 'CLIENT':
+      return '/portal'
+    case 'ATTORNEY':
+    case 'PARALEGAL':
+      return '/attorney'
+    case 'ADMIN':
+      return '/admin'
+  }
 }

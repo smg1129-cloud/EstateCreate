@@ -1,68 +1,68 @@
 'use server'
 
-import { revalidatePath } from 'next/cache'
-import { z } from 'zod'
 import bcrypt from 'bcryptjs'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth'
+import { z } from 'zod'
+import { revalidatePath } from 'next/cache'
 import { db } from '@/lib/db'
+import { getCurrentUser } from '@/lib/session'
+import { requireRole } from '@/lib/rbac'
 import { recordAudit } from '@/lib/audit'
 
-async function requireAdmin() {
-  const session = await getServerSession(authOptions)
-  if (!session?.user || session.user.role !== 'ADMIN') throw new Error('Unauthorized')
-  return session.user
-}
-
-const createUserSchema = z.object({
-  firstName: z.string().min(1).max(100),
-  lastName: z.string().min(1).max(100),
+const createSchema = z.object({
+  firstName: z.string().min(1),
+  lastName: z.string().min(1),
   email: z.string().email(),
-  role: z.enum(['STAFF', 'CLINICIAN', 'ADMIN']),
+  role: z.enum(['ATTORNEY', 'PARALEGAL', 'ADMIN']),
+  barNumber: z.string().optional(),
   password: z.string().min(10),
-  npi: z.string().max(20).optional(),
 })
 
-export async function createStaffUser(formData: FormData) {
-  const admin = await requireAdmin()
+export type ActionResult = { ok: true } | { ok: false; error: string }
 
-  const parsed = createUserSchema.parse({
+export async function createStaffUser(formData: FormData): Promise<ActionResult> {
+  const actor = await getCurrentUser()
+  if (!actor) return { ok: false, error: 'Unauthorized' }
+  requireRole(actor, ['ADMIN'])
+
+  const parsed = createSchema.safeParse({
     firstName: formData.get('firstName'),
     lastName: formData.get('lastName'),
     email: formData.get('email'),
     role: formData.get('role'),
+    barNumber: formData.get('barNumber') || undefined,
     password: formData.get('password'),
-    npi: formData.get('npi') || undefined,
   })
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? 'Invalid input' }
 
-  if (parsed.role === 'CLINICIAN' && !parsed.npi) {
-    throw new Error('NPI is required when creating a clinician account')
+  const email = parsed.data.email.toLowerCase().trim()
+  if (await db.user.findUnique({ where: { email } })) {
+    return { ok: false, error: 'A user with that email already exists.' }
   }
-
-  const passwordHash = await bcrypt.hash(parsed.password, 12)
 
   const user = await db.user.create({
     data: {
-      organizationId: admin.organizationId,
-      firstName: parsed.firstName,
-      lastName: parsed.lastName,
-      email: parsed.email.toLowerCase(),
-      role: parsed.role,
-      passwordHash,
+      organizationId: actor.organizationId,
+      email,
+      passwordHash: await bcrypt.hash(parsed.data.password, 12),
+      role: parsed.data.role,
+      firstName: parsed.data.firstName,
+      lastName: parsed.data.lastName,
+      barNumber: parsed.data.role === 'ATTORNEY' ? parsed.data.barNumber : undefined,
     },
   })
-
-  if (parsed.role === 'CLINICIAN' && parsed.npi) {
-    await db.provider.create({ data: { userId: user.id, npi: parsed.npi, specialties: [] } })
-  }
-
-  await recordAudit({ actorId: admin.id, action: 'CREATE', entityType: 'User', entityId: user.id, metadata: { role: parsed.role } })
+  await recordAudit({ actorId: actor.id, action: 'CREATE', entityType: 'User', entityId: user.id, metadata: { role: parsed.data.role } })
   revalidatePath('/admin/users')
+  return { ok: true }
 }
 
-export async function setUserStatus(userId: string, status: 'ACTIVE' | 'SUSPENDED') {
-  const admin = await requireAdmin()
+export async function setUserStatus(formData: FormData): Promise<void> {
+  const actor = await getCurrentUser()
+  if (!actor) return
+  requireRole(actor, ['ADMIN'])
+  const userId = String(formData.get('userId'))
+  const status = String(formData.get('status')) as 'ACTIVE' | 'SUSPENDED' | 'DEACTIVATED'
+  if (userId === actor.id) return // don't let an admin lock themselves out
   await db.user.update({ where: { id: userId }, data: { status } })
-  await recordAudit({ actorId: admin.id, action: 'UPDATE', entityType: 'User', entityId: userId, metadata: { status } })
+  await recordAudit({ actorId: actor.id, action: 'UPDATE', entityType: 'User', entityId: userId, metadata: { status } })
   revalidatePath('/admin/users')
 }

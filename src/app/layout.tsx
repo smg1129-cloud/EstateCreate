@@ -3,8 +3,9 @@ import './globals.css'
 import { Providers } from './providers'
 
 export const metadata: Metadata = {
-  title: 'Meridian Health Telehealth Clinic',
-  description: 'Board-certified virtual care, licensed across multiple states.',
+  title: 'EstateCreate — Automated Florida Estate Planning',
+  description:
+    'Answer a guided questionnaire and receive attorney-reviewed Florida estate planning documents — wills, trusts, powers of attorney, and health care directives.',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

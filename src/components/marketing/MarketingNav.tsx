@@ -1,10 +1,9 @@
 import Link from 'next/link'
 
 const links = [
-  { href: '/services', label: 'Services' },
-  { href: '/providers', label: 'Our Providers' },
-  { href: '/about', label: 'About' },
-  { href: '/contact', label: 'Contact' },
+  { href: '/#how-it-works', label: 'How it works' },
+  { href: '/#documents', label: 'Documents' },
+  { href: '/#faq', label: 'FAQ' },
 ]
 
 export function MarketingNav() {
@@ -12,7 +11,7 @@ export function MarketingNav() {
     <header className="border-b border-gray-100">
       <nav className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4" aria-label="Main">
         <Link href="/" className="text-lg font-semibold text-brand-700">
-          Meridian Health
+          Estate<span className="text-brand-500">Create</span>
         </Link>
         <ul className="hidden gap-6 text-sm text-gray-700 md:flex">
           {links.map((link) => (
@@ -28,10 +27,10 @@ export function MarketingNav() {
             Sign in
           </Link>
           <Link
-            href="/book"
+            href="/register"
             className="rounded-md bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700"
           >
-            Book a visit
+            Get started
           </Link>
         </div>
       </nav>

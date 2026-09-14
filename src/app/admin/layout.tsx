@@ -1,26 +1,24 @@
 import { redirect } from 'next/navigation'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth'
-import { db } from '@/lib/db'
-import { RoleShell } from '@/components/RoleShell'
-
-const NAV_ITEMS = [
-  { href: '/admin', label: 'Overview' },
-  { href: '/admin/users', label: 'Users' },
-  { href: '/admin/licenses', label: 'Provider licenses' },
-  { href: '/admin/audit-log', label: 'Audit log' },
-]
+import { AppShell } from '@/components/AppShell'
+import { getCurrentUserRecord } from '@/lib/session'
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
-  const session = await getServerSession(authOptions)
-  if (!session?.user || session.user.role !== 'ADMIN') redirect('/login')
-
-  const user = await db.user.findUnique({ where: { id: session.user.id } })
+  const user = await getCurrentUserRecord()
   if (!user) redirect('/login')
+  if (user.role !== 'ADMIN') redirect('/')
 
   return (
-    <RoleShell title="Admin" userName={`${user.firstName} ${user.lastName}`} roleLabel="Admin" navItems={NAV_ITEMS}>
+    <AppShell
+      userLabel={`${user.firstName} ${user.lastName}`}
+      roleLabel="Admin"
+      navLinks={[
+        { href: '/admin', label: 'Overview' },
+        { href: '/admin/users', label: 'Users' },
+        { href: '/admin/audit-log', label: 'Audit log' },
+        { href: '/attorney', label: 'Review queue' },
+      ]}
+    >
       {children}
-    </RoleShell>
+    </AppShell>
   )
 }

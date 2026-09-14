@@ -9,6 +9,14 @@ export type AuditAction =
   | 'VIEW'
   | 'CREATE'
   | 'UPDATE'
+  | 'CONSENT'
+  | 'SUBMIT_INTAKE'
+  | 'GENERATE'
+  | 'SUBMIT_REVIEW'
+  | 'APPROVE'
+  | 'REQUEST_CHANGES'
+  | 'REJECT'
+  | 'SEND_FOR_SIGNATURE'
   | 'SIGN'
   | 'DOWNLOAD'
 
@@ -22,11 +30,13 @@ interface AuditEntry {
   metadata?: Prisma.InputJsonValue
 }
 
-/// Every read or write of PHI (patients, clinical notes, documents,
-/// prescriptions, appointments) MUST go through this — it is the single
-/// place the HIPAA Security Rule §164.312(b) audit-control requirement is
-/// satisfied. Never call db.auditLog directly elsewhere, and never let a
-/// caught error here silently swallow the underlying action's failure.
+/// Every view or mutation of privileged client information (matters,
+/// questionnaire answers, generated documents, reviews, signature events)
+/// MUST go through this — it is the single place the append-only audit trail
+/// is written, which is both an ethics/records-retention safeguard and the
+/// file's best malpractice defense. Never call db.auditLog directly
+/// elsewhere, and never let a caught error here silently swallow the
+/// underlying action's failure.
 export async function recordAudit(entry: AuditEntry): Promise<void> {
   await db.auditLog.create({
     data: {
@@ -41,7 +51,7 @@ export async function recordAudit(entry: AuditEntry): Promise<void> {
   })
 }
 
-/// Wraps a PHI-touching operation so the audit entry is written even if the
+/// Wraps a privileged operation so the audit entry is written even if the
 /// caller forgets — call the wrapped function, get the result, and the
 /// audit row lands atomically-enough (best-effort: if the audit write
 /// itself fails, we log loudly rather than hide the gap).

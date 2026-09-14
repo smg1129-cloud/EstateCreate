@@ -1,16 +1,17 @@
-// Telehealth clinic data model.
+// EstateCreate — automated Florida estate-planning data model.
 //
-// Design notes (see COMPLIANCE.md for full rationale):
-// - CRM entities (Lead, CommunicationLog) and ERM/EHR entities (ClinicalNote,
-//   Document, Medication, Allergy, Diagnosis, Prescription) are kept as
-//   separate models with separate access paths, even though they currently
-//   share one database — this keeps the door open to splitting them into
-//   isolated databases/schemas later without a redesign.
-// - Nothing here is hard-deleted. Clinical and audit records use soft-delete
-//   / append-only patterns because retention requirements are legally
-//   mandated (and vary by state) — deletion policy needs legal sign-off.
-// - AuditLog is written to by the application data-access layer (lib/audit.ts)
-//   on every PHI read/write, never edited or deleted by the app itself.
+// Design notes (see COMPLIANCE.md and README.md for the full rationale):
+// - Documents are generated deterministically from questionnaire answers by
+//   a coded template/clause engine (src/lib/documents), never by an LLM. The
+//   raw generated content is stored as a structured block model (contentJson)
+//   so a document can always be re-rendered to DOCX/PDF/HTML and diffed.
+// - Nothing legally significant is hard-deleted. GeneratedDocument versions
+//   are superseded, never overwritten; AuditLog is append-only; reviews and
+//   signature events accumulate. Estate documents carry retention and
+//   malpractice-defense weight, so deletion policy needs human/legal sign-off.
+// - The attorney review gate is a hard requirement: a document cannot be
+//   released to a client or sent for signature until an ATTORNEY has APPROVED
+//   that specific version. Enforced in the data-access layer, not just the UI.
 
 generator client {
   provider = "prisma-client-js"
@@ -22,9 +23,9 @@ datasource db {
 }
 
 enum Role {
-  PATIENT
-  STAFF
-  CLINICIAN
+  CLIENT
+  PARALEGAL
+  ATTORNEY
   ADMIN
 }
 
@@ -35,455 +36,313 @@ enum UserStatus {
 }
 
 model Organization {
-  id        String   @id @default(cuid())
-  name      String
-  createdAt DateTime @default(now())
+  id         String   @id @default(cuid())
+  name       String
+  // Firm-level defaults that flow into generated documents.
+  stateCode  String   @default("FL")
+  barName    String?  // e.g. "The Florida Bar"
+  createdAt  DateTime @default(now())
 
-  users     User[]
-  leads     Lead[]
+  users      User[]
+  matters    EstateMatter[]
 }
 
 /// Identity + credentials. One row per human who can log in, regardless of role.
 model User {
-  id             String     @id @default(cuid())
+  id             String       @id @default(cuid())
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id])
 
-  email          String     @unique
+  email          String       @unique
   passwordHash   String
   role           Role
-  status         UserStatus @default(ACTIVE)
+  status         UserStatus   @default(ACTIVE)
 
-  // TOTP MFA — required for STAFF/CLINICIAN/ADMIN (enforced in lib/auth.ts),
-  // optional for PATIENT. Secret is encrypted at the application layer
-  // (see lib/encryption.ts) before it's stored here.
-  mfaEnabled     Boolean    @default(false)
+  // TOTP MFA — required for staff-side roles (PARALEGAL/ATTORNEY/ADMIN),
+  // optional for CLIENT. Secret is encrypted at the application layer
+  // (src/lib/encryption.ts) before storage.
+  mfaEnabled     Boolean      @default(false)
   mfaSecretEnc   String?
 
   firstName      String
   lastName       String
   phone          String?
+  // Bar number for attorneys; surfaces on documents they approve.
+  barNumber      String?
 
-  createdAt      DateTime   @default(now())
-  updatedAt      DateTime   @updatedAt
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
   lastLoginAt    DateTime?
 
-  patient        Patient?
-  provider       Provider?
-  auditLogs      AuditLog[]      @relation("AuditActor")
-  assignedLeads  Lead[]          @relation("LeadAssignee")
-  communications CommunicationLog[] @relation("CommAuthor")
-  tasks          StaffTask[]     @relation("TaskAssignee")
+  clientMatters    EstateMatter[]     @relation("MatterClient")
+  assignedMatters  EstateMatter[]     @relation("MatterAttorney")
+  reviews          DocumentReview[]   @relation("ReviewReviewer")
+  auditLogs        AuditLog[]         @relation("AuditActor")
+  consents         ConsentRecord[]    @relation("ConsentUser")
 
   @@index([organizationId])
+  @@index([role])
 }
 
-/// Demographic + non-clinical profile for a patient. DOB/address are PHI
-/// once linked to any clinical activity, so this model is access-scoped
-/// the same as the ERM tables (see lib/rbac.ts).
-model Patient {
-  id             String   @id @default(cuid())
-  userId         String   @unique
-  user           User     @relation(fields: [userId], references: [id])
-
-  dateOfBirth    DateTime
-  addressLine1   String?
-  addressLine2   String?
-  city           String?
-  state          String   // 2-letter USPS code; drives licensure matching
-  postalCode     String?
-  emergencyContactName  String?
-  emergencyContactPhone String?
-
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-
-  appointments   Appointment[]
-  consents       ConsentRecord[]
-  clinicalNotes  ClinicalNote[]
-  documents      Document[]
-  medications    Medication[]
-  allergies      Allergy[]
-  diagnoses      Diagnosis[]
-  prescriptions  Prescription[]
-  invoices       Invoice[]
-  communications CommunicationLog[] @relation("CommPatient")
-  leads          Lead[]
-
-  @@index([state])
+enum MatterStatus {
+  INTAKE            // client is filling questionnaires
+  READY_TO_GENERATE // intake complete, awaiting/queued for generation
+  IN_REVIEW         // documents generated, attorney reviewing
+  CHANGES_REQUESTED // attorney sent it back; client/paralegal to revise
+  APPROVED          // all documents approved by an attorney
+  EXECUTION         // out for signature / RON
+  COMPLETED         // executed documents delivered
+  ABANDONED
 }
 
-model Provider {
-  id          String   @id @default(cuid())
-  userId      String   @unique
-  user        User     @relation(fields: [userId], references: [id])
-
-  npi         String   @unique
-  specialties String[] // e.g. ["Family Medicine", "Psychiatry"]
-  bio         String?
-
-  createdAt   DateTime @default(now())
-
-  licenses      ProviderLicense[]
-  appointments  Appointment[]
-  clinicalNotes ClinicalNote[]
-  prescriptions Prescription[]
+enum PlanType {
+  UNDETERMINED
+  WILL_BASED
+  TRUST_BASED
 }
 
-enum LicenseStatus {
-  ACTIVE
-  EXPIRED
-  SUSPENDED
-}
-
-/// One row per state a provider is licensed to practice in. The booking
-/// flow (src/app/book) checks the patient's stated state against an ACTIVE,
-/// non-expired license here before allowing an appointment to be created.
-model ProviderLicense {
-  id             String        @id @default(cuid())
-  providerId     String
-  provider       Provider      @relation(fields: [providerId], references: [id])
-
-  state          String        // 2-letter USPS code
-  licenseNumber  String
-  status         LicenseStatus @default(ACTIVE)
-  issuedAt       DateTime
-  expiresAt      DateTime
-
-  createdAt      DateTime      @default(now())
-
-  @@unique([providerId, state])
-  @@index([state, status])
-}
-
-enum LeadStatus {
-  NEW
-  CONTACTED
-  QUALIFIED
-  CONVERTED
-  LOST
-}
-
-/// CRM entity for a prospective (or not-yet-linked) patient. Deliberately
-/// separate from Patient — a Lead may hold minimal contact info and no PHI
-/// until it converts into a Patient + Appointment.
-model Lead {
-  id             String     @id @default(cuid())
+/// The estate-planning engagement for one client. Anchors the questionnaires,
+/// the generated document set, review, and signing.
+model EstateMatter {
+  id             String       @id @default(cuid())
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id])
 
-  firstName      String
-  lastName       String
-  email          String?
-  phone          String?
-  source         String?    // e.g. "website-form", "referral", "ad"
-  status         LeadStatus @default(NEW)
-  notes          String?
+  clientId       String
+  client         User         @relation("MatterClient", fields: [clientId], references: [id])
 
-  assignedToId   String?
-  assignedTo     User?      @relation("LeadAssignee", fields: [assignedToId], references: [id])
+  // Assigned reviewing attorney (nullable until triaged/assigned).
+  attorneyId     String?
+  attorney       User?        @relation("MatterAttorney", fields: [attorneyId], references: [id])
 
-  convertedPatientId String?
-  convertedPatient   Patient? @relation(fields: [convertedPatientId], references: [id])
+  reference      String       @unique // human-facing matter number, e.g. "EC-2026-000123"
+  status         MatterStatus @default(INTAKE)
+  planType       PlanType     @default(UNDETERMINED)
 
-  createdAt      DateTime   @default(now())
-  updatedAt      DateTime   @updatedAt
+  // Cached output of the triage rules engine: which document types this
+  // client should receive, plus the rationale/flags. Recomputed on intake
+  // changes; the authoritative source is always the questionnaire answers.
+  recommendedDocTypes String[] @default([])
+  planSummary    Json?
 
-  communications CommunicationLog[] @relation("CommLead")
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  questionnaires QuestionnaireResponse[]
+  documents      GeneratedDocument[]
+  consents       ConsentRecord[]
 
   @@index([organizationId, status])
+  @@index([clientId])
+  @@index([attorneyId])
 }
 
-enum CommChannel {
-  EMAIL
-  SMS
-  PHONE
-  PORTAL_MESSAGE
-  NOTE
+enum QuestionnaireKind {
+  TRIAGE        // "what do you need" — identifies the plan type
+  ESTATE_INTAKE // full estate/asset/family/wishes questionnaire
 }
 
-enum CommDirection {
-  INBOUND
-  OUTBOUND
+/// A completed (or in-progress) questionnaire for a matter. Answers are stored
+/// as JSON keyed by the question id defined in src/lib/questionnaire/schema.ts.
+/// A new submission bumps `version` rather than overwriting, so we retain what
+/// the client actually answered at the time a given document version was built.
+model QuestionnaireResponse {
+  id          String            @id @default(cuid())
+  matterId    String
+  matter      EstateMatter      @relation(fields: [matterId], references: [id])
+
+  kind        QuestionnaireKind
+  version     Int               @default(1)
+  answers     Json              // { [questionId]: value }
+  // Section id -> completed? — drives the progress UI and "can generate" gate.
+  progress    Json?
+  completedAt DateTime?
+
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@unique([matterId, kind, version])
+  @@index([matterId, kind])
 }
 
-/// CRM communication history. Can relate to a Lead and/or a Patient.
-/// Content here is operational/administrative (scheduling, billing
-/// questions) — clinical content belongs in ClinicalNote instead.
-model CommunicationLog {
-  id          String        @id @default(cuid())
-
-  leadId      String?
-  lead        Lead?         @relation("CommLead", fields: [leadId], references: [id])
-
-  patientId   String?
-  patient     Patient?      @relation("CommPatient", fields: [patientId], references: [id])
-
-  authorId    String
-  author      User          @relation("CommAuthor", fields: [authorId], references: [id])
-
-  channel     CommChannel
-  direction   CommDirection
-  subject     String?
-  body        String
-
-  createdAt   DateTime      @default(now())
-
-  @@index([leadId])
-  @@index([patientId])
+enum DocumentType {
+  LAST_WILL
+  REVOCABLE_LIVING_TRUST
+  POUR_OVER_WILL
+  DURABLE_POWER_OF_ATTORNEY
+  HEALTH_CARE_SURROGATE
+  LIVING_WILL
+  HIPAA_AUTHORIZATION
+  SPECIAL_NEEDS_TRUST
+  PERSONAL_PROPERTY_MEMORANDUM
+  PRENEED_GUARDIAN_DESIGNATION
 }
 
-model StaffTask {
-  id           String    @id @default(cuid())
-  title        String
-  description  String?
-  dueAt        DateTime?
-  completedAt  DateTime?
-
-  assignedToId String
-  assignedTo   User      @relation("TaskAssignee", fields: [assignedToId], references: [id])
-
-  createdAt    DateTime  @default(now())
-
-  @@index([assignedToId, completedAt])
+enum DocumentStatus {
+  DRAFT             // generated, not yet submitted for review
+  IN_REVIEW         // submitted to an attorney
+  CHANGES_REQUESTED // attorney requested changes
+  APPROVED          // approved by an attorney (releasable / signable)
+  REJECTED          // attorney rejected this version outright
+  SUPERSEDED        // replaced by a newer generated version
+  EXECUTED          // signed/notarized
 }
 
-enum AppointmentStatus {
-  SCHEDULED
-  CHECKED_IN
+/// One generated document version. The deterministic engine writes
+/// `contentJson` (the block model); renderers turn that into docx/pdf/html.
+/// `contentHash` lets us detect whether a regeneration actually changed
+/// anything the attorney already reviewed.
+model GeneratedDocument {
+  id            String         @id @default(cuid())
+  matterId      String
+  matter        EstateMatter   @relation(fields: [matterId], references: [id])
+
+  type          DocumentType
+  version       Int            @default(1)
+  status        DocumentStatus @default(DRAFT)
+
+  title         String
+  contentJson   Json           // DocumentModel from src/lib/documents/blocks.ts
+  contentHash   String         // sha256 of the normalized model
+  engineVersion String         // generator/version stamp for reproducibility
+
+  // Which questionnaire version this was built from — reproducibility.
+  builtFromQuestionnaireId String?
+
+  // Storage keys for rendered artifacts. In production these point at
+  // encrypted object storage (S3 + SSE-KMS); in dev the storage adapter
+  // writes under .data/ (git-ignored). Bytes never live in the database.
+  docxKey       String?
+  pdfKey        String?
+
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  reviews       DocumentReview[]
+  signature     SignatureRequest?
+
+  @@unique([matterId, type, version])
+  @@index([matterId, status])
+}
+
+enum ReviewDecision {
+  SUBMITTED         // sent for review (no decision yet)
+  APPROVED
+  CHANGES_REQUESTED
+  REJECTED
+}
+
+/// Append-only review trail for a specific document version. Clause-level
+/// notes are stored in `annotations` (array of { blockRef, comment }).
+model DocumentReview {
+  id          String            @id @default(cuid())
+  documentId  String
+  document    GeneratedDocument @relation(fields: [documentId], references: [id])
+
+  reviewerId  String
+  reviewer    User              @relation("ReviewReviewer", fields: [reviewerId], references: [id])
+
+  decision    ReviewDecision
+  comment     String?
+  annotations Json?             // [{ blockRef, comment }]
+
+  createdAt   DateTime          @default(now())
+
+  @@index([documentId, createdAt])
+}
+
+enum ExecutionMethod {
+  REMOTE_ONLINE_NOTARIZATION
+  IN_PERSON
+}
+
+enum SignatureStatus {
+  NOT_STARTED
+  SENT
   IN_PROGRESS
   COMPLETED
+  DECLINED
   CANCELLED
-  NO_SHOW
+  EXPIRED
 }
 
-enum VisitType {
-  VIDEO
-  PHONE
+/// Tracks the execution (signing/notarization) of an APPROVED document via
+/// the e-sign / RON adapter (src/lib/esign). No document may enter this stage
+/// unless its status is APPROVED — enforced in the data-access layer.
+model SignatureRequest {
+  id              String            @id @default(cuid())
+  documentId      String            @unique
+  document        GeneratedDocument @relation(fields: [documentId], references: [id])
+
+  method          ExecutionMethod
+  provider        String            // adapter name, e.g. "mock" | "notarize"
+  externalRef     String?           // vendor-side envelope/session id
+  status          SignatureStatus   @default(NOT_STARTED)
+
+  // Signers, witnesses, and notary as recorded/required. FL execution rules
+  // (two witnesses + notary for a self-proved will; RON per Fla. Stat.
+  // 117.201 et seq.) are captured in signers + the execution checklist.
+  signers         Json              // [{ role, name, email, status, signedAt }]
+
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  completedAt     DateTime?
+
+  events          SignatureEvent[]
 }
 
-model Appointment {
-  id             String            @id @default(cuid())
+/// Append-only log of signing lifecycle events from the adapter/webhook.
+model SignatureEvent {
+  id                 String           @id @default(cuid())
+  signatureRequestId String
+  signatureRequest   SignatureRequest @relation(fields: [signatureRequestId], references: [id])
 
-  patientId      String
-  patient        Patient           @relation(fields: [patientId], references: [id])
+  type               String           // e.g. "SENT", "VIEWED", "SIGNED", "NOTARIZED", "COMPLETED"
+  actor              String?          // signer/notary identifier
+  payload            Json?
+  createdAt          DateTime         @default(now())
 
-  providerId     String
-  provider       Provider          @relation(fields: [providerId], references: [id])
-
-  scheduledAt    DateTime
-  durationMin    Int               @default(20)
-  visitType      VisitType         @default(VIDEO)
-  status         AppointmentStatus @default(SCHEDULED)
-  reasonForVisit String?
-
-  // Snapshot of the patient's state at booking time, so a later address
-  // change can't retroactively make a past visit look non-compliant.
-  stateAtTimeOfVisit String
-
-  // Video adapter session reference (e.g. Daily room name). Never store
-  // recordings or transcripts here — see COMPLIANCE.md.
-  videoRoomRef   String?
-
-  createdAt      DateTime          @default(now())
-  updatedAt      DateTime          @updatedAt
-
-  clinicalNotes  ClinicalNote[]
-  invoice        Invoice?
-
-  @@index([patientId])
-  @@index([providerId, scheduledAt])
+  @@index([signatureRequestId, createdAt])
 }
 
 enum ConsentType {
-  TELEHEALTH_CONSENT
+  ENGAGEMENT_LETTER          // scope/limitations of the automated service
+  ELECTRONIC_RECORDS_CONSENT // E-SIGN / UETA consent to electronic docs
   PRIVACY_NOTICE
   TERMS_OF_SERVICE
-  FINANCIAL_RESPONSIBILITY
 }
 
-/// Signed consent/acknowledgment records. Captured before any clinical
-/// data collection in the booking flow. Never deleted or overwritten —
+/// Signed consent/acknowledgment records. The engagement + electronic-records
+/// consents are captured before intake begins. Never edited or overwritten —
 /// a re-consent creates a new row with a bumped version.
 model ConsentRecord {
-  id         String      @id @default(cuid())
-  patientId  String
-  patient    Patient     @relation(fields: [patientId], references: [id])
+  id         String       @id @default(cuid())
+
+  userId     String
+  user       User         @relation("ConsentUser", fields: [userId], references: [id])
+
+  matterId   String?
+  matter     EstateMatter? @relation(fields: [matterId], references: [id])
 
   type       ConsentType
-  version    String      // e.g. "2026-01-v2" — ties to the exact document text shown
-  signedAt   DateTime    @default(now())
-  ipAddress  String
+  version    String        // ties to the exact text shown, e.g. "2026-09-v1"
+  signedAt   DateTime      @default(now())
+  ipAddress  String?
 
-  @@index([patientId, type])
+  @@index([userId, type])
 }
 
-/// ERM/EHR clinical documentation. Access is restricted to clinicians
-/// treating the patient plus the patient themself (read-only) — enforced
-/// in lib/rbac.ts, not just hidden in the UI.
-model ClinicalNote {
-  id            String       @id @default(cuid())
-
-  patientId     String
-  patient       Patient      @relation(fields: [patientId], references: [id])
-
-  providerId    String
-  provider      Provider     @relation(fields: [providerId], references: [id])
-
-  appointmentId String?
-  appointment   Appointment? @relation(fields: [appointmentId], references: [id])
-
-  noteType      String       @default("SOAP")
-  subjective    String?
-  objective     String?
-  assessment    String?
-  plan          String?
-
-  signedAt      DateTime?
-  // Amendments are appended, not edited in place, once a note is signed —
-  // preserves the original record per EHR documentation-integrity norms.
-  amendmentOf   String?
-
-  createdAt     DateTime     @default(now())
-  updatedAt     DateTime     @updatedAt
-
-  @@index([patientId])
-  @@index([providerId])
-}
-
-model Document {
-  id          String   @id @default(cuid())
-  patientId   String
-  patient     Patient  @relation(fields: [patientId], references: [id])
-
-  uploadedById String
-  fileName    String
-  contentType String
-  // Storage key only — actual bytes live in encrypted object storage
-  // (S3 with SSE-KMS in prod), never inline in the database.
-  storageKey  String
-  sizeBytes   Int
-
-  createdAt   DateTime @default(now())
-
-  @@index([patientId])
-}
-
-model Medication {
-  id         String    @id @default(cuid())
-  patientId  String
-  patient    Patient   @relation(fields: [patientId], references: [id])
-
-  name       String
-  dosage     String?
-  frequency  String?
-  active     Boolean   @default(true)
-  startedAt  DateTime  @default(now())
-  endedAt    DateTime?
-
-  @@index([patientId])
-}
-
-model Allergy {
-  id         String   @id @default(cuid())
-  patientId  String
-  patient    Patient  @relation(fields: [patientId], references: [id])
-
-  substance  String
-  reaction   String?
-  severity   String?
-
-  @@index([patientId])
-}
-
-model Diagnosis {
-  id         String   @id @default(cuid())
-  patientId  String
-  patient    Patient  @relation(fields: [patientId], references: [id])
-
-  icd10Code  String
-  description String
-  diagnosedAt DateTime @default(now())
-  resolvedAt  DateTime?
-
-  @@index([patientId])
-}
-
-enum PrescriptionStatus {
-  DRAFT
-  SENT
-  ERROR
-  CANCELLED
-}
-
-/// Stub for e-prescribing. This app never transmits a prescription itself —
-/// externalVendorRef points at the record created by a certified
-/// e-prescribing vendor (see lib/prescribing and COMPLIANCE.md).
-model Prescription {
-  id                String             @id @default(cuid())
-
-  patientId         String
-  patient           Patient            @relation(fields: [patientId], references: [id])
-
-  providerId        String
-  provider          Provider           @relation(fields: [providerId], references: [id])
-
-  medicationName    String
-  dosage            String
-  quantity          String
-  directions        String
-  isControlled      Boolean            @default(false)
-
-  status            PrescriptionStatus @default(DRAFT)
-  externalVendorRef String?
-
-  createdAt         DateTime           @default(now())
-
-  @@index([patientId])
-}
-
-enum InvoiceStatus {
-  OPEN
-  PAID
-  FAILED
-  REFUNDED
-  VOID
-}
-
-/// Billing lives structurally apart from clinical tables — an invoice
-/// references an appointment by id only, never clinical content.
-model Invoice {
-  id              String        @id @default(cuid())
-
-  patientId       String
-  patient         Patient       @relation(fields: [patientId], references: [id])
-
-  appointmentId   String?       @unique
-  appointment     Appointment?  @relation(fields: [appointmentId], references: [id])
-
-  amountCents     Int
-  currency        String        @default("usd")
-  status          InvoiceStatus @default(OPEN)
-
-  stripePaymentIntentId String?
-
-  createdAt       DateTime      @default(now())
-  paidAt          DateTime?
-
-  @@index([patientId])
-}
-
-/// Append-only audit trail. Every PHI read/write goes through
-/// lib/audit.ts, which writes here. Nothing in the app updates or deletes
-/// rows in this table.
+/// Append-only audit trail. Every view/mutation of a matter, questionnaire,
+/// document, review, or signature goes through src/lib/audit.ts, which writes
+/// here. Nothing in the app updates or deletes rows in this table.
 model AuditLog {
   id         String   @id @default(cuid())
 
   actorId    String
   actor      User     @relation("AuditActor", fields: [actorId], references: [id])
 
-  action     String   // e.g. "VIEW", "CREATE", "UPDATE", "LOGIN", "LOGIN_FAILED"
-  entityType String   // e.g. "ClinicalNote", "Patient", "Document"
+  action     String   // "VIEW" | "CREATE" | "UPDATE" | "GENERATE" | "APPROVE" | ...
+  entityType String   // "EstateMatter" | "GeneratedDocument" | ...
   entityId   String?
 
   ipAddress  String?
