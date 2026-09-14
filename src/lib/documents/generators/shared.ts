@@ -158,6 +158,58 @@ export function hipaaExecution(): ExecutionRequirement {
   }
 }
 
+export function irrevocableTrustExecution(): ExecutionRequirement {
+  return {
+    witnesses: 2,
+    notaryRequired: true,
+    authority: 'Fla. Stat. 736.0403 (trust execution); 736.0402 (requirements for creation)',
+    steps: [
+      'The grantor (settlor) and the trustee sign the trust agreement.',
+      'Sign before a notary public; two witnesses are recommended and are required if the trust contains testamentary provisions.',
+      'Fund the trust by transferring the intended property (for an insurance trust, assign or apply for the policies in the name of the trust; a gift of an existing policy starts a three-year look-back under I.R.C. 2035).',
+      'This trust is intended to be irrevocable once executed — confirm the grantor understands it generally cannot be amended or revoked.',
+    ],
+  }
+}
+
+export function gunTrustExecution(): ExecutionRequirement {
+  return {
+    witnesses: 2,
+    notaryRequired: true,
+    authority: 'Fla. Stat. 736.0403 (trust execution); 26 U.S.C. ch. 53 (NFA)',
+    steps: [
+      'The grantor and trustee sign the trust agreement before a notary public; two witnesses are recommended.',
+      'List the firearms on Schedule A. For any NFA item (suppressor, short-barreled rifle, machine gun), acquisition and transfer into or out of the trust require ATF approval (Form 1 or Form 4) and payment of any applicable tax.',
+      'Every trustee and responsible person must be legally eligible to possess firearms; never transfer or possess a firearm in violation of federal or Florida law.',
+    ],
+  }
+}
+
+export function certificateExecution(): ExecutionRequirement {
+  return {
+    witnesses: 0,
+    notaryRequired: true,
+    authority: 'Fla. Stat. 736.1017 (certification of trust)',
+    steps: [
+      'A currently acting trustee signs the certification and swears to it before a notary public.',
+      'Provide the certification (not the full trust) to a bank, title company, or other third party as proof of the trust’s existence and the trustee’s authority.',
+    ],
+  }
+}
+
+export function petTrustExecution(): ExecutionRequirement {
+  return {
+    witnesses: 2,
+    notaryRequired: true,
+    authority: 'Fla. Stat. 736.0408 (trust for care of an animal)',
+    steps: [
+      'The grantor and trustee sign the trust agreement before a notary public; two witnesses are recommended.',
+      'Fund the trust with the amount designated for the animals’ care.',
+      'The trust terminates on the death of the last surviving animal it covers; name where the remaining funds then go.',
+    ],
+  }
+}
+
 export function memoExecution(): ExecutionRequirement {
   return {
     witnesses: 0,

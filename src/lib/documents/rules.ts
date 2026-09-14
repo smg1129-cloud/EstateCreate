@@ -64,6 +64,49 @@ export function recommendDocuments(ctx: IntakeContext): PlanRecommendation {
     rationale.push('Separate writing for tangible personal property (Fla. Stat. 732.515).')
   }
 
+  // A certificate of trust rides along with any revocable living trust — it is
+  // what a bank or title company needs to see during funding.
+  if (documentTypes.includes('REVOCABLE_LIVING_TRUST')) {
+    documentTypes.push('CERTIFICATE_OF_TRUST')
+    rationale.push('Certificate of Trust to evidence the trust and the trustee’s authority to third parties during funding (Fla. Stat. 736.1017).')
+  }
+
+  const blendedFamily = Boolean(ctx.spouse?.hasOwnChildren) || ctx.children.some((c) => c.relationship === 'step')
+  const estateTaxExposed = ctx.signals.netWorth === 'over_13m'
+
+  // Non-citizen spouse: a QDOT preserves the marital deduction / defers estate
+  // tax that would otherwise be unavailable.
+  if (ctx.spouse && !ctx.spouse.isUSCitizen) {
+    documentTypes.push('QDOT_TRUST')
+    rationale.push('Qualified Domestic Trust (QDOT): the spouse is not a U.S. citizen, so the unlimited marital deduction is otherwise unavailable (I.R.C. 2056A).')
+  } else if (ctx.spouse && (blendedFamily || estateTaxExposed)) {
+    // Marital / credit-shelter split for blended families or taxable estates.
+    documentTypes.push('MARITAL_TRUST')
+    rationale.push(
+      blendedFamily
+        ? 'Marital (QTIP) & credit-shelter trust provisions to provide for the spouse while preserving the remainder for the client’s own descendants (blended family).'
+        : 'Marital & credit-shelter (A-B) trust provisions to use both spouses’ exclusions and manage estate-tax exposure.'
+    )
+  }
+
+  // ILIT to keep life-insurance proceeds out of a taxable estate.
+  if (estateTaxExposed && ctx.assets.lifeInsurance.length > 0) {
+    documentTypes.push('IRREVOCABLE_LIFE_INSURANCE_TRUST')
+    rationale.push('Irrevocable Life Insurance Trust (ILIT) to exclude policy proceeds from the taxable estate (I.R.C. 2042).')
+  }
+
+  // Enforceable pet trust when the client set money aside for animals.
+  if (ctx.pets.length > 0 && (ctx.petTrustAmount ?? 0) > 0) {
+    documentTypes.push('PET_TRUST')
+    rationale.push('Pet trust to provide enforceably for the care of the client’s animals (Fla. Stat. 736.0408).')
+  }
+
+  // Gun trust for firearms owners (essential for NFA items).
+  if (ctx.assets.ownsFirearms) {
+    documentTypes.push('GUN_TRUST')
+    rationale.push('Firearms (NFA) trust to hold firearms and allow lawful possession and transfer, avoiding an accidental unlawful transfer at death.')
+  }
+
   return {
     planType: trust ? 'TRUST_BASED' : 'WILL_BASED',
     documentTypes,

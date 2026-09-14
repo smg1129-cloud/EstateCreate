@@ -15,6 +15,12 @@ import { generateHipaaAuthorization } from './hipaaAuthorization'
 import { generateSpecialNeedsTrust } from './specialNeedsTrust'
 import { generatePersonalPropertyMemo } from './personalPropertyMemo'
 import { generatePreneedGuardian } from './preneedGuardian'
+import { generateCertificateOfTrust } from './certificateOfTrust'
+import { generateMaritalTrust } from './maritalTrust'
+import { generateQdotTrust } from './qdotTrust'
+import { generateIlit } from './ilit'
+import { generatePetTrust } from './petTrust'
+import { generateGunTrust } from './gunTrust'
 
 export type Generator = (ctx: IntakeContext) => DocumentModel
 
@@ -29,6 +35,12 @@ export const GENERATORS: Record<DocumentType, Generator> = {
   SPECIAL_NEEDS_TRUST: generateSpecialNeedsTrust,
   PERSONAL_PROPERTY_MEMORANDUM: generatePersonalPropertyMemo,
   PRENEED_GUARDIAN_DESIGNATION: generatePreneedGuardian,
+  CERTIFICATE_OF_TRUST: generateCertificateOfTrust,
+  MARITAL_TRUST: generateMaritalTrust,
+  QDOT_TRUST: generateQdotTrust,
+  IRREVOCABLE_LIFE_INSURANCE_TRUST: generateIlit,
+  PET_TRUST: generatePetTrust,
+  GUN_TRUST: generateGunTrust,
 }
 
 /** Human-readable labels for each document type (used across the UI). */
@@ -43,4 +55,10 @@ export const DOCUMENT_LABELS: Record<DocumentType, string> = {
   SPECIAL_NEEDS_TRUST: 'Special Needs Trust',
   PERSONAL_PROPERTY_MEMORANDUM: 'Personal Property Memorandum',
   PRENEED_GUARDIAN_DESIGNATION: 'Pre-Need Guardian Designation',
+  CERTIFICATE_OF_TRUST: 'Certificate of Trust',
+  MARITAL_TRUST: 'Marital & Credit Shelter Trust',
+  QDOT_TRUST: 'Qualified Domestic Trust (QDOT)',
+  IRREVOCABLE_LIFE_INSURANCE_TRUST: 'Irrevocable Life Insurance Trust (ILIT)',
+  PET_TRUST: 'Pet Trust',
+  GUN_TRUST: 'Firearms (NFA) Trust',
 }

@@ -22,6 +22,12 @@ export type DocumentType =
   | 'SPECIAL_NEEDS_TRUST'
   | 'PERSONAL_PROPERTY_MEMORANDUM'
   | 'PRENEED_GUARDIAN_DESIGNATION'
+  | 'CERTIFICATE_OF_TRUST'
+  | 'MARITAL_TRUST'
+  | 'QDOT_TRUST'
+  | 'IRREVOCABLE_LIFE_INSURANCE_TRUST'
+  | 'PET_TRUST'
+  | 'GUN_TRUST'
 
 /** A styled run of text within a paragraph or clause. A bare string is an
  * unstyled run. */
