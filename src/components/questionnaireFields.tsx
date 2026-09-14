@@ -1,92 +1,13 @@
 'use client'
 
-import { useMemo, useState } from 'react'
-import { useRouter } from 'next/navigation'
-import {
-  isQuestionVisible,
-  isSectionVisible,
-  type Answers,
-  type AnswerValue,
-  type Question,
-  type Questionnaire,
-  type YesNoExplain,
-} from '@/lib/questionnaire'
+// Shared input primitives for rendering a single questionnaire question. Used
+// by the multi-step QuestionnaireWizard (and available to any other form). Each
+// `Field` is fully controlled: it renders the right control for the question
+// type and reports changes through onChange.
 
-type SubmitResult = { ok: boolean; error?: string; nextPath?: string }
+import type { AnswerValue, Question, YesNoExplain } from '@/lib/questionnaire'
 
-export function QuestionnaireForm({
-  questionnaire,
-  initialAnswers,
-  externalAnswers,
-  action,
-  submitLabel = 'Save & continue',
-}: {
-  questionnaire: Questionnaire
-  initialAnswers: Answers
-  externalAnswers: Answers
-  action: (answers: Answers) => Promise<SubmitResult>
-  submitLabel?: string
-}) {
-  const router = useRouter()
-  const [answers, setAnswers] = useState<Answers>(initialAnswers ?? {})
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState('')
-
-  // Combined view used only for evaluating visibility conditions (a section in
-  // the estate intake can depend on a triage answer).
-  const combined = useMemo<Answers>(() => ({ ...externalAnswers, ...answers }), [externalAnswers, answers])
-
-  function set(id: string, value: AnswerValue) {
-    setAnswers((prev) => ({ ...prev, [id]: value }))
-  }
-
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    setSaving(true)
-    setError('')
-    const res = await action(answers)
-    setSaving(false)
-    if (!res.ok) {
-      setError(res.error ?? 'Something went wrong saving your answers.')
-      return
-    }
-    if (res.nextPath) {
-      router.push(res.nextPath)
-      router.refresh()
-    }
-  }
-
-  const sections = questionnaire.sections.filter((s) => isSectionVisible(s, combined))
-
-  return (
-    <form onSubmit={onSubmit} className="space-y-10">
-      {questionnaire.intro && (
-        <p className="rounded-lg bg-brand-50 p-4 text-sm text-brand-900">{questionnaire.intro}</p>
-      )}
-      {sections.map((section) => (
-        <section key={section.id} className="rounded-lg border border-gray-100 bg-white p-6 shadow-sm">
-          <h2 className="text-lg font-semibold text-gray-900">{section.title}</h2>
-          {section.description && <p className="mt-1 text-sm text-gray-500">{section.description}</p>}
-          <div className="mt-5 space-y-6">
-            {section.questions
-              .filter((q) => isQuestionVisible(q, combined))
-              .map((q) => (
-                <Field key={q.id} q={q} value={answers[q.id]} onChange={(v) => set(q.id, v)} />
-              ))}
-          </div>
-        </section>
-      ))}
-      {error && <p className="text-sm text-red-600">{error}</p>}
-      <div className="flex items-center gap-3">
-        <button type="submit" disabled={saving}
-          className="rounded-md bg-brand-600 px-6 py-2.5 font-medium text-white hover:bg-brand-700 disabled:opacity-50">
-          {saving ? 'Saving…' : submitLabel}
-        </button>
-        <span className="text-sm text-gray-400">Your progress is saved.</span>
-      </div>
-    </form>
-  )
-}
+export const inputCls = 'mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm'
 
 function Label({ q }: { q: Question }) {
   return (
@@ -100,9 +21,7 @@ function Label({ q }: { q: Question }) {
   )
 }
 
-const inputCls = 'mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm'
-
-function Field({ q, value, onChange }: { q: Question; value: AnswerValue; onChange: (v: AnswerValue) => void }) {
+export function Field({ q, value, onChange }: { q: Question; value: AnswerValue; onChange: (v: AnswerValue) => void }) {
   switch (q.type) {
     case 'long_text':
       return (
@@ -253,7 +172,7 @@ function SubField({ f, value, onChange }: { f: Question; value: unknown; onChang
       </div>
     )
   }
-  const type = f.type === 'date' ? 'date' : f.type === 'number' ? 'text' : 'text'
+  const type = f.type === 'date' ? 'date' : 'text'
   return (
     <div>
       <label className="block text-xs font-medium text-gray-600">{f.label}</label>
