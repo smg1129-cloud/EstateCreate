@@ -110,6 +110,12 @@ Staff accounts must complete MFA enrollment (`/mfa/setup`) on first login.
 4. **As admin** (`admin@estatecreate.test`): check **Audit log** — intake,
    generation, review decisions, downloads, and signing all appear.
 
+## Deploying to your own server
+
+To run EstateCreate on an Ubuntu box — including reaching a box that isn't on
+your current network (Tailscale), and a production install behind Nginx + TLS
+with systemd — see **[DEPLOY.md](./DEPLOY.md)**.
+
 ## Project layout
 
 ```
