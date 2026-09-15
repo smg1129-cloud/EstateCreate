@@ -93,6 +93,19 @@ npm run db:seed                      # firm, staff, and one demo client (8 gener
 npm run dev                          # http://localhost:3000
 ```
 
+> **If port 5432 is already in use** (you already run another Postgres on this
+> box), the container won't start — `failed to bind host port 0.0.0.0:5432:
+> address already in use` — and `prisma db push`/`db:seed` then fail with
+> `P1000 Authentication failed` (they hit the *other* Postgres). Publish
+> EstateCreate's Postgres on **5433** instead and point the app at it:
+> ```bash
+> sed -i "s|'5432:5432'|'5433:5432'|" docker-compose.yml
+> sed -i "s|localhost:5432|localhost:5433|" .env
+> docker compose up -d
+> docker compose ps                 # postgres should show ...:5433->5432/tcp, Up
+> ```
+> then re-run `npx prisma db push` and `npm run db:seed`.
+
 Open `http://localhost:3000` (via the SSH tunnel from Part 0, or directly if
 you're on the box's network) and sign in with a seeded account
 (password `DevPassword!123`):
@@ -225,6 +238,58 @@ sure `NEXTAUTH_URL` uses `https://` and restart the service after changing `.env
 > Nginx/certbot and use Tailscale's own HTTPS (`tailscale cert` / `tailscale
 > serve`) or just the SSH tunnel — nothing needs to be exposed publicly.
 
+### 3.5 Alternative to Nginx: Cloudflare Tunnel (recommended if the box is behind NAT)
+
+If the box has no public IP (home/office behind a router) and DNS is on
+Cloudflare, a **Cloudflare Tunnel** is the cleanest way to publish the site: the
+box dials *out* to Cloudflare, so there's no port-forwarding and nothing is
+exposed. Cloudflare terminates TLS, so you don't need Nginx or certbot.
+
+1. Install `cloudflared` on the box:
+   ```bash
+   sudo mkdir -p --mode=0755 /usr/share/keyrings
+   curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
+   echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main" | sudo tee /etc/apt/sources.list.d/cloudflared.list
+   sudo apt-get update && sudo apt-get install -y cloudflared
+   ```
+2. Cloudflare **Zero Trust → Networks → Tunnels & Mesh** → create a tunnel
+   (Cloudflared connector) and copy its **token**.
+3. Run the connector as its **own** systemd unit. **Do not** run
+   `cloudflared service install` if the box already runs a cloudflared service
+   (only one `cloudflared.service` is allowed) — install a uniquely-named unit:
+   ```bash
+   echo 'PASTE_TUNNEL_TOKEN' | sudo tee /etc/cloudflared/estate-token >/dev/null
+   sudo chmod 600 /etc/cloudflared/estate-token
+   sudo tee /etc/systemd/system/cloudflared-estate.service >/dev/null <<'EOF'
+   [Unit]
+   Description=Cloudflare Tunnel (estate)
+   After=network.target
+
+   [Service]
+   ExecStart=/usr/bin/cloudflared --no-autoupdate tunnel run --token-file /etc/cloudflared/estate-token
+   Restart=on-failure
+   RestartSec=5
+   User=root
+
+   [Install]
+   WantedBy=multi-user.target
+   EOF
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now cloudflared-estate
+   ```
+4. In the tunnel's **Published application routes** (older UI: "Public
+   Hostnames"), add: `estate.example.com` → Service **HTTP** → `localhost:3000`.
+   That creates the DNS record automatically.
+5. Set `NEXTAUTH_URL="https://estate.example.com"` in `.env`,
+   `sudo systemctl restart estatecreate`, and open the URL — TLS is automatic.
+
+> **Adding to a tunnel you already run:** one tunnel can serve many hostnames. If
+> the box already has a healthy tunnel, just add `estate.example.com →
+> localhost:3000` as another Published application route on *that* tunnel and skip
+> creating a new one. When a connector runs with `--token`/`--token-file` it is
+> **dashboard-managed** — configure hostnames in the dashboard; any on-disk
+> `config.yml` is ignored in token mode.
+
 ---
 
 ## Updating to a new version
@@ -270,3 +335,20 @@ sudo systemctl restart estatecreate
   PDF library. Ignore it.
 - **Port 3000 already in use** — set `PORT` (e.g. `Environment=PORT=3001` in the
   service, and update the Nginx `proxy_pass`).
+- **Docker Postgres won't start: `address already in use` on 5432** — another
+  Postgres is already running on the box. Publish EstateCreate's DB on 5433 and
+  update `DATABASE_URL` (see the note in Part 2).
+- **`P1000 Authentication failed` on `prisma db push` / `db:seed`** — usually a
+  symptom of the above: the Docker container didn't start on 5432, so the app
+  connected to the pre-existing Postgres (wrong credentials). Fix the port
+  conflict, confirm `docker compose ps` shows the container **Up**, and re-run.
+- **`cloudflared service is already installed at …/cloudflared.service`** — the
+  box already runs one cloudflared service (it may serve other sites — don't
+  uninstall it). Install your new tunnel as a separately-named unit
+  (`cloudflared-<name>.service`, see 3.5).
+- **A `cloudflared` service points at a `--token-file` that no longer exists** —
+  it keeps running on the token it read at startup but will fail on the next
+  restart/reboot. Re-write the token file (or recreate the unit) so it restarts
+  cleanly.
+- **`EBADENGINE … required: node >=20, current: v18`** — the app targets Node 20;
+  it builds and runs on 18 but upgrade when convenient (`setup_20.x`, Part 1).
