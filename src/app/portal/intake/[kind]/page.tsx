@@ -7,8 +7,8 @@ import {
   getResponse,
   saveQuestionnaire,
   canGenerate,
-  generateMatterDocuments,
 } from '@/lib/matters/service'
+import { buildQuoteForMatter } from '@/lib/billing/service'
 import { QuestionnaireWizard } from '@/components/QuestionnaireWizard'
 import type { QuestionnaireKind } from '@prisma/client'
 
@@ -58,11 +58,16 @@ export default async function IntakePage({ params }: { params: { kind: string } 
     const { complete } = await saveQuestionnaire({ matterId, kind, answers, actorId })
 
     if (kind === 'TRIAGE') {
+      // Build a preliminary quote (base set) so the client sees an estimate,
+      // then continue to the detailed questionnaire.
+      if (complete) await buildQuoteForMatter(matterId, actorId)
       return { ok: true, nextPath: '/portal/intake/estate' }
     }
     if (complete && (await canGenerate(matterId))) {
-      await generateMatterDocuments(matterId, actorId)
-      return { ok: true, nextPath: '/portal/documents' }
+      // Rebuild the quote with any additional proposed documents, then send the
+      // client to checkout. Documents are generated only after payment.
+      await buildQuoteForMatter(matterId, actorId)
+      return { ok: true, nextPath: '/portal/checkout' }
     }
     return { ok: true, nextPath: '/portal' }
   }

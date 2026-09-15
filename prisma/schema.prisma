@@ -45,6 +45,7 @@ model Organization {
 
   users      User[]
   matters    EstateMatter[]
+  documentPrices DocumentPrice[]
 }
 
 /// Identity + credentials. One row per human who can log in, regardless of role.
@@ -98,6 +99,7 @@ model User {
 enum MatterStatus {
   INTAKE            // client is filling questionnaires
   READY_TO_GENERATE // intake complete, awaiting/queued for generation
+  AWAITING_PAYMENT  // quote presented; documents not generated until paid
   IN_REVIEW         // documents generated, attorney reviewing
   CHANGES_REQUESTED // attorney sent it back; client/paralegal to revise
   APPROVED          // all documents approved by an attorney
@@ -142,10 +144,121 @@ model EstateMatter {
   questionnaires QuestionnaireResponse[]
   documents      GeneratedDocument[]
   consents       ConsentRecord[]
+  quotes         Quote[]
+  payments       Payment[]
 
   @@index([organizationId, status])
   @@index([clientId])
   @@index([attorneyId])
+}
+
+// ---- Billing --------------------------------------------------------------
+// Per-document flat-fee model. Documents are NOT generated until the client
+// pays for the selected set (the payment gate lives in the matter service).
+
+/// Firm-configurable flat fee for one document type. Admin-editable so the
+/// firm sets its own pricing without a code change. Amounts are in the
+/// smallest currency unit (cents) to avoid floating-point money.
+model DocumentPrice {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  type        DocumentType
+  amountCents Int          @default(0)
+  currency    String       @default("usd")
+  active      Boolean      @default(true)
+
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@unique([organizationId, type])
+}
+
+enum QuoteStatus {
+  DRAFT            // being assembled / edited by the client
+  AWAITING_PAYMENT // presented, selection locked for checkout
+  PAID             // payment succeeded; generation released
+  CANCELLED        // superseded by a newer quote or abandoned
+}
+
+/// A price quote for a matter: the selectable set of documents and the fee for
+/// each. Rebuilt from the rules engine after triage (base set) and again after
+/// the detailed questionnaire (adds proposed documents). Preserves the client's
+/// accept/reject selections across rebuilds. One quote is active per matter.
+model Quote {
+  id            String       @id @default(cuid())
+  matterId      String
+  matter        EstateMatter @relation(fields: [matterId], references: [id])
+
+  status        QuoteStatus  @default(DRAFT)
+  currency      String       @default("usd")
+  // Snapshot of the sum of selected line items at last (re)build / checkout.
+  subtotalCents Int          @default(0)
+
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  items         QuoteItem[]
+  payments      Payment[]
+
+  @@index([matterId, status])
+}
+
+enum LineItemOrigin {
+  BASE     // recommended from the triage questionnaire (pre-selected)
+  PROPOSED // suggested by the detailed questionnaire (opt-in)
+}
+
+/// One document line on a quote. Price is snapshotted at build time so a later
+/// catalog change does not silently alter an outstanding quote.
+model QuoteItem {
+  id            String         @id @default(cuid())
+  quoteId       String
+  quote         Quote          @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+
+  type          DocumentType
+  label         String
+  origin        LineItemOrigin @default(BASE)
+  selected      Boolean        @default(true)
+  unitPriceCents Int           @default(0)
+
+  @@unique([quoteId, type])
+}
+
+enum PaymentStatus {
+  PENDING   // checkout started, not yet confirmed
+  SUCCEEDED // funds captured
+  FAILED    // provider reported failure / cancelled
+  REFUNDED  // captured then refunded (e.g. attorney could not serve)
+}
+
+/// A payment attempt against a quote. Handled through the payments adapter
+/// (mock by default; a real processor added behind the same interface).
+model Payment {
+  id            String        @id @default(cuid())
+  quoteId       String
+  quote         Quote         @relation(fields: [quoteId], references: [id])
+  matterId      String
+  matter        EstateMatter  @relation(fields: [matterId], references: [id])
+
+  provider      String        // "mock" | "stripe" | ...
+  externalRef   String?       // provider session / payment intent id
+  amountCents   Int
+  currency      String        @default("usd")
+  status        PaymentStatus @default(PENDING)
+
+  // Which document types this payment covers (the selected set at checkout).
+  paidForTypes  DocumentType[] @default([])
+
+  refundReason  String?
+  refundedAt    DateTime?
+
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@index([matterId])
+  @@index([externalRef])
 }
 
 enum QuestionnaireKind {

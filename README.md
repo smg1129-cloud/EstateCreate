@@ -22,13 +22,20 @@ addressed by qualified people and processes, not by source code alone.
    distribution wishes, incapacity preferences, and health-care wishes
    (a generation-focused distillation of the firm's full FL client
    questionnaire).
-4. **The engine assembles documents deterministically** from a fixed clause
-   library and attaches attorney-facing issue-spotting flags drawn from the
-   firm's 36-module attorney checklist (with statutory anchors).
-5. **An attorney reviews** each document, sees the flags, and
+4. **The client reviews a quote and pays.** A per-document flat fee is quoted
+   from the recommended set (base documents from triage; additional documents
+   the detailed questionnaire surfaces are presented as opt-in suggestions).
+   The client selects what to buy and pays — **documents are not generated
+   until payment succeeds.** Fees are set by the firm in Admin → Pricing;
+   payments go through an adapter (mock by default). See
+   [COMPLIANCE.md](./COMPLIANCE.md) on flat-fee/trust-accounting obligations.
+5. **The engine assembles the paid documents deterministically** from a fixed
+   clause library and attaches attorney-facing issue-spotting flags drawn from
+   the firm's 36-module attorney checklist (with statutory anchors).
+6. **An attorney reviews** each document, sees the flags, and
    approves / requests changes / rejects. Nothing is released or signable
    until an attorney has **approved that exact version**.
-6. **Execution** by e-signature / remote online notarization through an
+7. **Execution** by e-signature / remote online notarization through an
    adapter (mock by default), with Florida-specific execution instructions.
 
 ## Documents in the suite

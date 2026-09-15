@@ -3,10 +3,12 @@ import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/session'
 import { db } from '@/lib/db'
 import { getActiveMatterForClient, getResponse } from '@/lib/matters/service'
+import { getLatestQuote, hasCapturedPayment, formatMoney } from '@/lib/billing/service'
 
 const MATTER_STATUS_COPY: Record<string, { label: string; help: string }> = {
   INTAKE: { label: 'Getting started', help: 'Complete your questionnaires so we can prepare your documents.' },
   READY_TO_GENERATE: { label: 'Ready to prepare', help: 'Your answers are complete. We are assembling your documents.' },
+  AWAITING_PAYMENT: { label: 'Payment needed', help: 'Review your recommended documents and fees, then check out to begin preparation.' },
   IN_REVIEW: { label: 'In attorney review', help: 'Your documents are being reviewed by a licensed Florida attorney.' },
   CHANGES_REQUESTED: { label: 'Changes requested', help: 'Your attorney asked for some updates. Please review the notes.' },
   APPROVED: { label: 'Approved', help: 'Your documents are approved and ready to sign.' },
@@ -49,6 +51,12 @@ export default async function PortalDashboard() {
   const intakeDone = Boolean(intake?.completedAt)
   const status = MATTER_STATUS_COPY[matter.status] ?? { label: matter.status, help: '' }
 
+  // Billing state.
+  const quote = await getLatestQuote(matter.id)
+  const paid = await hasCapturedPayment(matter.id)
+  const selectedCount = quote?.items.filter((i) => i.selected).length ?? 0
+  const estimateCents = quote?.items.filter((i) => i.selected).reduce((s, i) => s + i.unitPriceCents, 0) ?? 0
+
   return (
     <div className="space-y-8">
       <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
@@ -65,11 +73,30 @@ export default async function PortalDashboard() {
           href="/portal/intake/triage" cta="Start" />
         <Step n={2} title="Your estate & asset questionnaire" done={intakeDone} active={triageDone && !intakeDone}
           href="/portal/intake/estate" cta={intake ? 'Continue' : 'Start'} />
-        <Step n={3} title="We prepare your documents & an attorney reviews them" done={docCount > 0 && matter.status !== 'IN_REVIEW'} active={intakeDone && docCount === 0}
+        <Step n={3} title="Review your documents & fees, then pay" done={paid} active={intakeDone && !paid}
+          href="/portal/checkout" cta="Review & pay" />
+        <Step n={4} title="We prepare your documents & an attorney reviews them" done={paid && matter.status !== 'IN_REVIEW' && docCount > 0} active={paid && matter.status === 'IN_REVIEW'}
           href="/portal/documents" cta="View status" />
-        <Step n={4} title="Review, sign, and execute" done={matter.status === 'COMPLETED'} active={matter.status === 'APPROVED' || matter.status === 'EXECUTION'}
+        <Step n={5} title="Review, sign, and execute" done={matter.status === 'COMPLETED'} active={matter.status === 'APPROVED' || matter.status === 'EXECUTION'}
           href="/portal/documents" cta="Go to documents" />
       </div>
+
+      {/* Preliminary estimate after triage, before payment. */}
+      {triageDone && !paid && quote && selectedCount > 0 && (
+        <div className="rounded-lg border border-brand-100 bg-brand-50 p-5">
+          <p className="text-sm font-medium text-brand-900">
+            {intakeDone ? 'Your documents & fees' : 'Estimated fees so far'}
+          </p>
+          <p className="mt-1 text-2xl font-bold text-brand-900">{formatMoney(estimateCents, quote.currency)}</p>
+          <p className="mt-1 text-sm text-brand-800">
+            {selectedCount} document{selectedCount === 1 ? '' : 's'} selected · flat fee per document.
+            {!intakeDone && ' This may change based on your detailed answers.'}
+          </p>
+          <Link href="/portal/checkout" className="mt-3 inline-block rounded-md bg-brand-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-brand-700">
+            {intakeDone ? 'Review & pay' : 'View estimate'}
+          </Link>
+        </div>
+      )}
 
       {docCount > 0 && (
         <div className="rounded-lg border border-gray-100 bg-white p-5">

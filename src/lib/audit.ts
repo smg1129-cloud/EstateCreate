@@ -19,6 +19,9 @@ export type AuditAction =
   | 'SEND_FOR_SIGNATURE'
   | 'SIGN'
   | 'DOWNLOAD'
+  | 'QUOTE'
+  | 'PAYMENT'
+  | 'REFUND'
 
 interface AuditEntry {
   actorId: string

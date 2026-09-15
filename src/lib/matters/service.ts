@@ -17,7 +17,7 @@ import { renderPdf } from '@/lib/documents/render/pdf'
 import { getStorage, artifactKey } from '@/lib/storage'
 import { getEsignAdapter, type ExecutionMethod, type Signer } from '@/lib/esign'
 import type { DocumentModel } from '@/lib/documents/blocks'
-import type { QuestionnaireKind, Prisma } from '@prisma/client'
+import type { QuestionnaireKind, DocumentType, Prisma } from '@prisma/client'
 
 // ---- Matter creation ------------------------------------------------------
 
@@ -146,10 +146,22 @@ async function renderAndStore(matterId: string, documentId: string, model: Docum
  * review history is preserved. Newly generated documents enter IN_REVIEW and
  * land in the attorney queue.
  */
-export async function generateMatterDocuments(matterId: string, actorId: string) {
+export async function generateMatterDocuments(
+  matterId: string,
+  actorId: string,
+  options?: { onlyTypes?: DocumentType[] },
+) {
   const answers = await getMergedAnswers(matterId)
   const plan = generatePlan(answers)
   const intake = await getResponse(matterId, 'ESTATE_INTAKE')
+
+  // When a paid quote scopes the set, generate only the document types the
+  // client actually paid for (the payment gate). Absent a filter, the full
+  // recommended set is generated (e.g. the seed / an admin regeneration).
+  const onlyTypes = options?.onlyTypes ? new Set(options.onlyTypes) : null
+  const documentsToBuild = onlyTypes
+    ? plan.documents.filter((d) => onlyTypes.has(d.type))
+    : plan.documents
 
   // Supersede existing, non-executed documents.
   await db.generatedDocument.updateMany({
@@ -158,7 +170,7 @@ export async function generateMatterDocuments(matterId: string, actorId: string)
   })
 
   const created: string[] = []
-  for (const doc of plan.documents) {
+  for (const doc of documentsToBuild) {
     const priorMax = await db.generatedDocument.findFirst({
       where: { matterId, type: doc.type },
       orderBy: { version: 'desc' },

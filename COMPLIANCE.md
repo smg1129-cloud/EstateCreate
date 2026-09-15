@@ -75,6 +75,18 @@ posture, not a property of source code.
   clients. Out-of-state property, non-citizen status, community-property
   history, and similar issues are flagged for the attorney but require
   individualized handling.
+- **Fee handling and trust accounting.** The app charges a per-document flat
+  fee *before* documents are generated and reviewed (generation is gated on
+  payment). Collecting a fee in advance implicates the Rules Regulating The
+  Florida Bar — the reasonableness and flat-fee requirements of Rule 4-1.5
+  (including any "earned on receipt"/nonrefundable characterization and the
+  required disclosures) and the trust-accounting rules of Rule 5-1.1
+  (unearned fees generally belong in trust/IOLTA, not operating). The code
+  records payments, the paid-for set, and supports refunds, but **whether a
+  fee is earned when charged, where the funds are held, and the refund policy
+  are decisions a Florida attorney must make and disclose** — they are not set
+  by the software. Set real fees in Admin → Pricing; the seed's prices are
+  placeholders.
 
 ## Adapters that are stubs
 
@@ -83,3 +95,7 @@ posture, not a property of source code.
 - **Document storage** (`src/lib/storage`): local filesystem adapter for
   development; an encrypted object-store (S3 + SSE-KMS) adapter is required
   for production.
+- **Payments** (`src/lib/payments`): interface + mock only. The mock adapter
+  simulates a hosted checkout and moves no money. Wire a real processor
+  (Stripe, LawPay, etc.) behind the `PaymentAdapter` interface, with the
+  trust-accounting posture above resolved, before taking real payments.

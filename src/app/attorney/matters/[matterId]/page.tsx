@@ -10,6 +10,8 @@ import { STAFF_DOC_STATUS, TONE_CLASSES, MATTER_STATUS_LABEL } from '@/lib/matte
 import type { ReviewFlag, DocumentType } from '@/lib/documents/blocks'
 import { FlagList } from '@/components/review/FlagList'
 import { AnswersSummary } from '@/components/review/AnswersSummary'
+import { formatMoney } from '@/lib/billing/service'
+import { RefundControl } from './RefundControl'
 
 export default async function MatterOverview({ params }: { params: { matterId: string } }) {
   const actor = await getCurrentUser()
@@ -27,6 +29,12 @@ export default async function MatterOverview({ params }: { params: { matterId: s
 
   const answers = (await getMergedAnswers(matter.id)) as Answers
   const summary = (matter.planSummary as { planType?: string; rationale?: string[]; flags?: ReviewFlag[] } | null) ?? {}
+
+  const payment = await db.payment.findFirst({
+    where: { matterId: matter.id, status: { in: ['SUCCEEDED', 'REFUNDED'] } },
+    orderBy: { createdAt: 'desc' },
+  })
+  const canRefund = payment?.status === 'SUCCEEDED' && (actor.role === 'ATTORNEY' || actor.role === 'ADMIN')
 
   return (
     <div className="space-y-8">
@@ -71,6 +79,29 @@ export default async function MatterOverview({ params }: { params: { matterId: s
           <FlagList flags={summary.flags ?? []} />
         </div>
       </section>
+
+      {/* Billing */}
+      {payment && (
+        <section className="rounded-lg border border-gray-100 bg-white p-5">
+          <h2 className="font-semibold text-gray-900">Billing</h2>
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
+            <div className="text-sm text-gray-600">
+              {payment.status === 'REFUNDED' ? (
+                <span>
+                  <span className="font-medium text-gray-900">{formatMoney(payment.amountCents, payment.currency)}</span>{' '}
+                  refunded{payment.refundReason ? ` — ${payment.refundReason}` : ''}.
+                </span>
+              ) : (
+                <span>
+                  <span className="font-medium text-gray-900">{formatMoney(payment.amountCents, payment.currency)}</span>{' '}
+                  paid for {payment.paidForTypes.length} document{payment.paidForTypes.length === 1 ? '' : 's'} · flat fee.
+                </span>
+              )}
+            </div>
+            {canRefund && <RefundControl matterId={matter.id} />}
+          </div>
+        </section>
+      )}
 
       {/* Documents */}
       <section>

@@ -1,9 +1,32 @@
 import { PrismaClient } from '@prisma/client'
+import type { DocumentType } from '@prisma/client'
 import bcrypt from 'bcryptjs'
 import type { Answers } from '@/lib/questionnaire/types'
-import { generateMatterDocuments } from '@/lib/matters/service'
 import { computeProgress } from '@/lib/questionnaire'
 import { getQuestionnaire } from '@/lib/questionnaire'
+import { buildQuoteForMatter, getActiveQuote, finalizePayment } from '@/lib/billing/service'
+import { DOCUMENT_LABELS } from '@/lib/documents/generators'
+
+// Placeholder flat fees (in cents) so the demo has a priced checkout. These are
+// NOT the firm's real prices — set those in Admin → Pricing before going live.
+const PLACEHOLDER_PRICES_CENTS: Record<DocumentType, number> = {
+  LAST_WILL: 40000,
+  REVOCABLE_LIVING_TRUST: 150000,
+  POUR_OVER_WILL: 30000,
+  DURABLE_POWER_OF_ATTORNEY: 20000,
+  HEALTH_CARE_SURROGATE: 12500,
+  LIVING_WILL: 12500,
+  HIPAA_AUTHORIZATION: 7500,
+  SPECIAL_NEEDS_TRUST: 175000,
+  PERSONAL_PROPERTY_MEMORANDUM: 5000,
+  PRENEED_GUARDIAN_DESIGNATION: 10000,
+  CERTIFICATE_OF_TRUST: 15000,
+  MARITAL_TRUST: 200000,
+  QDOT_TRUST: 225000,
+  IRREVOCABLE_LIFE_INSURANCE_TRUST: 250000,
+  PET_TRUST: 90000,
+  GUN_TRUST: 60000,
+}
 
 const prisma = new PrismaClient()
 
@@ -154,6 +177,17 @@ async function main() {
     data: { name: 'Sunshine Estate Law, PLLC', stateCode: 'FL', barName: 'The Florida Bar' },
   })
 
+  // Seed the firm's document price catalog with placeholder fees.
+  await prisma.documentPrice.createMany({
+    data: (Object.keys(DOCUMENT_LABELS) as DocumentType[]).map((type) => ({
+      organizationId: org.id,
+      type,
+      amountCents: PLACEHOLDER_PRICES_CENTS[type],
+      currency: 'usd',
+      active: true,
+    })),
+  })
+
   const admin = await prisma.user.create({
     data: { organizationId: org.id, email: 'admin@estatecreate.test', passwordHash, role: 'ADMIN', firstName: 'Alex', lastName: 'Rivera' },
   })
@@ -207,8 +241,29 @@ async function main() {
     },
   })
 
-  // Run the deterministic engine to populate the attorney review queue.
-  const result = await generateMatterDocuments(matter.id, client.id)
+  // Build the quote, then simulate the client paying for the full set so the
+  // demo matter shows a paid engagement with documents in the review queue.
+  await buildQuoteForMatter(matter.id, client.id)
+  const quote = await getActiveQuote(matter.id)
+  if (!quote) throw new Error('Seed: quote was not created')
+  // Demo client accepts every recommended document (incl. proposed add-ons).
+  await prisma.quoteItem.updateMany({ where: { quoteId: quote.id }, data: { selected: true } })
+  const items = await prisma.quoteItem.findMany({ where: { quoteId: quote.id } })
+  const payment = await prisma.payment.create({
+    data: {
+      quoteId: quote.id,
+      matterId: matter.id,
+      provider: 'mock',
+      externalRef: 'seed',
+      amountCents: items.reduce((s, i) => s + i.unitPriceCents, 0),
+      currency: 'usd',
+      status: 'PENDING',
+      paidForTypes: items.map((i) => i.type),
+    },
+  })
+  // Finalize the payment — this releases generation for the paid-for types.
+  await finalizePayment(payment.id, client.id)
+  const result = { count: await prisma.generatedDocument.count({ where: { matterId: matter.id, status: { not: 'SUPERSEDED' } } }) }
 
   console.log('Seed complete.')
   console.log(`  Organization: ${org.name}`)
@@ -216,7 +271,7 @@ async function main() {
   console.log(`  Attorney:  attorney@estatecreate.test / ${SEED_PASSWORD}`)
   console.log(`  Paralegal: paralegal@estatecreate.test / ${SEED_PASSWORD}`)
   console.log(`  Client:    client@estatecreate.test / ${SEED_PASSWORD}`)
-  console.log(`  Matter ${matter.reference}: generated ${result.count} documents (${result.plan.recommendation.planType}).`)
+  console.log(`  Matter ${matter.reference}: paid quote, generated ${result.count} documents.`)
 }
 
 main()

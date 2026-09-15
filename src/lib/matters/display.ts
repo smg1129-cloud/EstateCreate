@@ -25,6 +25,7 @@ export const STAFF_DOC_STATUS: Record<DocumentStatus, { label: string; tone: 'ne
 export const MATTER_STATUS_LABEL: Record<MatterStatus, string> = {
   INTAKE: 'Intake',
   READY_TO_GENERATE: 'Ready to generate',
+  AWAITING_PAYMENT: 'Awaiting payment',
   IN_REVIEW: 'In review',
   CHANGES_REQUESTED: 'Changes requested',
   APPROVED: 'Approved',
