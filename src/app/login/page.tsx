@@ -4,9 +4,22 @@ import { Suspense, useState } from 'react'
 import { signIn, getSession } from 'next-auth/react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
+import { OAuthButtons } from '@/components/auth/OAuthButtons'
 
 const MFA_REQUIRED = 'MFA_REQUIRED'
 const MFA_INVALID = 'MFA_INVALID'
+
+// Codes set by the NextAuth signIn callback (redirected to /login?error=…).
+const OAUTH_ERRORS: Record<string, string> = {
+  staff_oauth:
+    'Firm staff sign in with email, password, and an authenticator code — social sign-in is for clients.',
+  oauth_no_email: 'That provider did not share an email address, so we could not sign you in.',
+  oauth_unverified: 'Please verify your email with that provider before signing in.',
+  account_inactive: 'This account is not active. Please contact the office.',
+  oauth_unavailable: 'Social sign-in is temporarily unavailable. Please try email and password.',
+  OAuthAccountNotLinked:
+    'That email is already registered with a different sign-in method. Use your original method.',
+}
 
 function roleHome(role?: string): string {
   if (role === 'CLIENT') return '/portal'
@@ -26,6 +39,8 @@ function LoginForm() {
   const [loading, setLoading] = useState(false)
 
   const timedOut = params.get('reason') === 'timeout'
+  const oauthErrorCode = params.get('error')
+  const oauthError = oauthErrorCode ? OAUTH_ERRORS[oauthErrorCode] : undefined
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -61,7 +76,11 @@ function LoginForm() {
       <div className="rounded-lg border border-gray-100 bg-white p-8 shadow-sm">
         <h1 className="text-xl font-bold text-gray-900">Sign in</h1>
         {timedOut && <p className="mt-2 text-sm text-amber-700">Your session timed out. Please sign in again.</p>}
-        <form onSubmit={onSubmit} className="mt-6 space-y-4">
+        {oauthError && <p className="mt-2 text-sm text-red-600">{oauthError}</p>}
+        <div className="mt-6">
+          <OAuthButtons callbackUrl={params.get('callbackUrl') || '/portal'} />
+        </div>
+        <form onSubmit={onSubmit} className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700">Email</label>
             <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)}

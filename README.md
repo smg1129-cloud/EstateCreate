@@ -66,7 +66,9 @@ already approved can be detected.
 
 - Next.js 14 (App Router) + TypeScript
 - PostgreSQL + Prisma
-- Auth.js (NextAuth) credentials + TOTP MFA for staff
+- Auth.js (NextAuth): email/password + TOTP MFA for staff; optional social
+  login (Google / Microsoft / Apple / Facebook) for clients — see
+  [docs/ops/auth-providers.md](./docs/ops/auth-providers.md)
 - Tailwind CSS
 - `docx` (Word output) and `pdfkit` (PDF output) — deterministic, pure JS
 - E-sign / RON: adapter interface with a mock implementation by default

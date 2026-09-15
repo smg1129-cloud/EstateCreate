@@ -6,6 +6,8 @@ import { db } from '@/lib/db'
 import { decryptField } from '@/lib/encryption'
 import { recordAudit } from '@/lib/audit'
 import { requiresMfa } from '@/lib/rbac'
+import { buildOAuthProviders } from '@/lib/oauth/providers'
+import { linkOrCreateOAuthUser } from '@/lib/auth/oauthUser'
 
 // Errors thrown from authorize() surface as `?error=` on the NextAuth error
 // callback and as `result.error` from client-side signIn() — the login page
@@ -23,8 +25,14 @@ export const authOptions: NextAuthOptions = {
   },
   pages: {
     signIn: '/login',
+    // Provider/callback errors (e.g. a blocked staff social login) land back
+    // on the login page with ?error=<code>, which the page maps to a message.
+    error: '/login',
   },
   providers: [
+    // Social providers first (only the ones with configured credentials are
+    // included). Clients only — the signIn callback refuses staff accounts.
+    ...buildOAuthProviders(),
     CredentialsProvider({
       name: 'Credentials',
       credentials: {
@@ -42,6 +50,10 @@ export const authOptions: NextAuthOptions = {
         // Same generic failure path whether the email doesn't exist or the
         // password is wrong — don't leak which one it was.
         if (!user || user.status !== 'ACTIVE') return null
+
+        // A social-only client account has no password to compare against.
+        // Fail closed rather than throwing on a null hash.
+        if (!user.passwordHash) return null
 
         const validPassword = await bcrypt.compare(credentials.password, user.passwordHash)
         if (!validPassword) {
@@ -85,7 +97,60 @@ export const authOptions: NextAuthOptions = {
     }),
   ],
   callbacks: {
-    async jwt({ token, user, trigger }) {
+    // Gate every sign-in. Credentials are already fully validated in
+    // authorize(); here we only vet the OAuth path: require a verified email,
+    // then provision/link a CLIENT account. Returning a string redirects to
+    // /login?error=<code> (pages.error), which the login page maps to a message.
+    async signIn({ account, profile, user }) {
+      if (!account || account.provider === 'credentials') return true
+
+      // Google explicitly asserts verification; the others (Apple, Microsoft
+      // Entra, Facebook) only return an email once the account owns it.
+      const rawProfile = profile as Record<string, unknown> | null
+      const email =
+        (typeof rawProfile?.email === 'string' && rawProfile.email) ||
+        (typeof user?.email === 'string' && user.email) ||
+        ''
+      if (!email) return '/login?error=oauth_no_email'
+      if (account.provider === 'google' && rawProfile?.email_verified === false) {
+        return '/login?error=oauth_unverified'
+      }
+
+      const result = await linkOrCreateOAuthUser({
+        email,
+        name: (typeof rawProfile?.name === 'string' ? rawProfile.name : user?.name) ?? null,
+        image: user?.image ?? null,
+        provider: account.provider,
+      })
+
+      switch (result.status) {
+        case 'ok':
+          return true
+        case 'staff_blocked':
+          return '/login?error=staff_oauth'
+        case 'inactive':
+          return '/login?error=account_inactive'
+        case 'no_org':
+          return '/login?error=oauth_unavailable'
+      }
+    },
+    async jwt({ token, user, account, trigger }) {
+      // OAuth sign-in: `user` here is the provider profile, not our DB record,
+      // so resolve our user by the (verified) email and hydrate the token from
+      // it. Clients only, so requiresMfaSetup is always false.
+      if (account && account.provider !== 'credentials' && user?.email) {
+        const dbUser = await db.user.findUnique({
+          where: { email: user.email.toLowerCase().trim() },
+        })
+        if (dbUser) {
+          token.userId = dbUser.id
+          token.role = dbUser.role
+          token.organizationId = dbUser.organizationId
+          token.requiresMfaSetup = false
+          token.lastActivity = Date.now()
+        }
+        return token
+      }
       if (user) {
         token.userId = user.id
         token.role = user.role

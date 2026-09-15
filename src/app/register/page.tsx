@@ -5,6 +5,7 @@ import { signIn } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { registerClient } from './actions'
+import { OAuthButtons } from '@/components/auth/OAuthButtons'
 
 export default function RegisterPage() {
   const router = useRouter()
@@ -45,7 +46,10 @@ export default function RegisterPage() {
       <div className="rounded-lg border border-gray-100 bg-white p-8 shadow-sm">
         <h1 className="text-xl font-bold text-gray-900">Create your account</h1>
         <p className="mt-1 text-sm text-gray-500">Start your Florida estate plan. Takes a few minutes.</p>
-        <form onSubmit={onSubmit} className="mt-6 space-y-4">
+        <div className="mt-6">
+          <OAuthButtons callbackUrl="/portal" />
+        </div>
+        <form onSubmit={onSubmit} className="space-y-4">
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-sm font-medium text-gray-700">First name</label>

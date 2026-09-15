@@ -54,9 +54,20 @@ model User {
   organization   Organization @relation(fields: [organizationId], references: [id])
 
   email          String       @unique
-  passwordHash   String
+  // Nullable: a client who signs up purely through a social provider
+  // (Google/Apple/Microsoft/Facebook) never sets a password. Staff always
+  // have one — social login is refused for staff roles (see src/lib/auth.ts).
+  passwordHash   String?
   role           Role
   status         UserStatus   @default(ACTIVE)
+
+  // Avatar URL supplied by a social provider, if any.
+  image          String?
+  // OAuth providers this user has linked (e.g. ["google","apple"]). Used to
+  // show the client which sign-in methods are attached to their account and to
+  // avoid duplicate-linking. Credentials login is implied by a non-null
+  // passwordHash and is not listed here.
+  authProviders  String[]     @default([])
 
   // TOTP MFA — required for staff-side roles (PARALEGAL/ATTORNEY/ADMIN),
   // optional for CLIENT. Secret is encrypted at the application layer
