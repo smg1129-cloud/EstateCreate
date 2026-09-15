@@ -290,6 +290,11 @@ exposed. Cloudflare terminates TLS, so you don't need Nginx or certbot.
 > **dashboard-managed** — configure hostnames in the dashboard; any on-disk
 > `config.yml` is ignored in token mode.
 
+> **Box already runs other tunnels?** For diagnosing and safely untangling a
+> host that serves several tunnels (host services vs. Docker sidecars, retiring
+> a broken/duplicate connector without downtime), see
+> [docs/ops/cloudflared-cleanup.md](./docs/ops/cloudflared-cleanup.md).
+
 ---
 
 ## Updating to a new version
