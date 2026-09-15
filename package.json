@@ -11,7 +11,9 @@
     "db:migrate": "prisma migrate dev",
     "db:generate": "prisma generate",
     "db:seed": "tsx prisma/seed.ts",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "admin:create": "tsx scripts/create-admin.ts",
+    "admin:disable-demo": "tsx scripts/disable-demo-users.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
