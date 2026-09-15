@@ -1,16 +1,36 @@
-import crypto from 'crypto'
-import type { CheckoutRequest, CheckoutResult, PaymentProvider } from './types'
+import type {
+  PaymentAdapter,
+  CreateCheckoutParams,
+  CheckoutSession,
+  PaymentStatusResult,
+  RefundResult,
+} from './types'
 
-/// Local-dev stand-in — no real card collection happens. The route handler
-/// (src/app/api/payments/checkout/route.ts) is responsible for actually
-/// marking the invoice PAID when paidImmediately is true; this adapter only
-/// signals that it should.
-export class MockPaymentAdapter implements PaymentProvider {
-  async createCheckout(_request: CheckoutRequest): Promise<CheckoutResult> {
+/**
+ * Development payment adapter. It does not move money — it stands in for a
+ * hosted checkout by pointing the client at an in-app "simulated payment" page
+ * (`/portal/checkout/mock/[paymentId]`) with Pay / Cancel buttons. Confirming
+ * there calls the same service finalizer a real processor's webhook/redirect
+ * would, so the rest of the flow (generation gate, refunds) is exercised for
+ * real. Swap PAYMENTS_PROVIDER to a real adapter for production.
+ */
+export class MockPaymentAdapter implements PaymentAdapter {
+  async createCheckout(params: CreateCheckoutParams): Promise<CheckoutSession> {
     return {
-      providerRef: `MOCK-PAY-${crypto.randomUUID()}`,
-      redirectUrl: null,
-      paidImmediately: true,
+      provider: 'mock',
+      externalRef: `mock_${params.paymentId}`,
+      checkoutUrl: `/portal/checkout/mock/${params.paymentId}`,
+      status: 'PENDING',
     }
+  }
+
+  // The mock page drives status transitions via the service, so a poll simply
+  // reports pending; finalization is explicit, not inferred here.
+  async getStatus(_externalRef: string): Promise<PaymentStatusResult> {
+    return { status: 'PENDING' }
+  }
+
+  async refund(externalRef: string): Promise<RefundResult> {
+    return { status: 'REFUNDED', externalRef }
   }
 }

@@ -1,31 +1,29 @@
 import { NextResponse } from 'next/server'
+import type { NextRequest } from 'next/server'
 import { authenticator } from 'otplib'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth'
+import { getCurrentUser } from '@/lib/session'
 import { db } from '@/lib/db'
 import { decryptField } from '@/lib/encryption'
 import { recordAudit } from '@/lib/audit'
 
-export async function POST(req: Request) {
-  const session = await getServerSession(authOptions)
-  if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+// Verifies a TOTP code against the stored secret and, on success, marks MFA
+// enrolled. The client then refreshes its session to clear requiresMfaSetup.
+export async function POST(req: NextRequest) {
+  const actor = await getCurrentUser()
+  if (!actor) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const { code } = (await req.json()) as { code?: string }
-  if (!code) return NextResponse.json({ error: 'Code is required' }, { status: 400 })
+  const { code } = (await req.json().catch(() => ({}))) as { code?: string }
+  if (!code) return NextResponse.json({ error: 'Code required' }, { status: 400 })
 
-  const user = await db.user.findUnique({ where: { id: session.user.id } })
-  if (!user?.mfaSecretEnc) {
-    return NextResponse.json({ error: 'Call /api/mfa/setup first' }, { status: 400 })
-  }
+  const user = await db.user.findUnique({ where: { id: actor.id }, select: { mfaSecretEnc: true } })
+  if (!user?.mfaSecretEnc) return NextResponse.json({ error: 'No enrollment in progress' }, { status: 400 })
 
   const secret = decryptField(user.mfaSecretEnc)
-  const valid = authenticator.check(code, secret)
-  if (!valid) {
+  if (!authenticator.check(code, secret)) {
     return NextResponse.json({ error: 'Invalid code' }, { status: 400 })
   }
 
-  await db.user.update({ where: { id: user.id }, data: { mfaEnabled: true } })
-  await recordAudit({ actorId: user.id, action: 'MFA_ENROLLED', entityType: 'User', entityId: user.id })
-
+  await db.user.update({ where: { id: actor.id }, data: { mfaEnabled: true } })
+  await recordAudit({ actorId: actor.id, action: 'MFA_ENROLLED', entityType: 'User', entityId: actor.id })
   return NextResponse.json({ ok: true })
 }

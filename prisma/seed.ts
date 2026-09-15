@@ -1,156 +1,277 @@
 import { PrismaClient } from '@prisma/client'
+import type { DocumentType } from '@prisma/client'
 import bcrypt from 'bcryptjs'
+import type { Answers } from '@/lib/questionnaire/types'
+import { computeProgress } from '@/lib/questionnaire'
+import { getQuestionnaire } from '@/lib/questionnaire'
+import { buildQuoteForMatter, getActiveQuote, finalizePayment } from '@/lib/billing/service'
+import { DOCUMENT_LABELS } from '@/lib/documents/generators'
+
+// Placeholder flat fees (in cents) so the demo has a priced checkout. These are
+// NOT the firm's real prices — set those in Admin → Pricing before going live.
+const PLACEHOLDER_PRICES_CENTS: Record<DocumentType, number> = {
+  LAST_WILL: 40000,
+  REVOCABLE_LIVING_TRUST: 150000,
+  POUR_OVER_WILL: 30000,
+  DURABLE_POWER_OF_ATTORNEY: 20000,
+  HEALTH_CARE_SURROGATE: 12500,
+  LIVING_WILL: 12500,
+  HIPAA_AUTHORIZATION: 7500,
+  SPECIAL_NEEDS_TRUST: 175000,
+  PERSONAL_PROPERTY_MEMORANDUM: 5000,
+  PRENEED_GUARDIAN_DESIGNATION: 10000,
+  CERTIFICATE_OF_TRUST: 15000,
+  MARITAL_TRUST: 200000,
+  QDOT_TRUST: 225000,
+  IRREVOCABLE_LIFE_INSURANCE_TRUST: 250000,
+  PET_TRUST: 90000,
+  GUN_TRUST: 60000,
+}
 
 const prisma = new PrismaClient()
 
-// Seed passwords are for local development only. Every non-patient role
-// must still complete MFA enrollment on first login (see src/lib/auth.ts) —
-// these credentials alone are not sufficient to reach staff/clinician/admin
-// screens.
+// Seed passwords are for local development only. Every staff role must still
+// complete MFA enrollment on first login (see src/lib/auth.ts) — these
+// credentials alone are not sufficient to reach staff/admin screens.
 const SEED_PASSWORD = 'DevPassword!123'
+
+// A realistic, complete intake for a married client with minor children who
+// owns out-of-state property and wants privacy — which the rules engine turns
+// into a trust-based plan (RLT + pour-over) plus the full incapacity package.
+const TRIAGE_ANSWERS: Answers = {
+  'triage.reason': 'life_event',
+  'triage.primaryGoal': 'avoid_probate',
+  'triage.maritalStatus': 'married',
+  'triage.hasMinorChildren': true,
+  'triage.ownsRealEstate': true,
+  'triage.ownsOutOfStateRealEstate': true,
+  'triage.ownsBusiness': false,
+  'triage.netWorth': '500k_2m',
+  'triage.specialNeedsBeneficiary': false,
+  'triage.wantsIncapacityDocs': true,
+  'triage.privacyImportant': true,
+}
+
+const INTAKE_ANSWERS: Answers = {
+  'personal.fullName': 'Sarah Michelle Carter',
+  'personal.otherNames': 'Sarah Ellis (maiden)',
+  'personal.dob': '1986-04-12',
+  'personal.addressLine1': '1420 Riverside Avenue',
+  'personal.city': 'Jacksonville',
+  'personal.county': 'Duval',
+  'personal.state': 'FL',
+  'personal.postalCode': '32204',
+  'personal.gender': 'she',
+  'personal.isUSCitizen': true,
+  'personal.floridaDomicile': true,
+  'personal.govBenefits': { value: 'no' },
+
+  'spouse.fullName': 'John Alan Carter',
+  'spouse.dob': '1984-09-30',
+  'spouse.isUSCitizen': true,
+  'spouse.isMarried': true,
+  'spouse.prenup': { value: 'no' },
+  'spouse.hasOwnChildren': { value: 'no' },
+  'spouse.leaveEverythingToSpouse': true,
+
+  'prior.hadPriorMarriage': { value: 'no' },
+
+  'family.children': [
+    { fullName: 'Emma Grace Carter', dob: '2016-06-01', relationship: 'biological', isMinor: true, deceased: false, specialNeeds: false },
+    { fullName: 'Liam John Carter', dob: '2020-02-14', relationship: 'biological', isMinor: true, deceased: false, specialNeeds: false },
+  ],
+  'family.treatEqually': { value: 'yes' },
+  'family.afterbornIntent': true,
+  'family.disinherit': { value: 'no' },
+  'family.deceasedChildShare': 'per_stirpes',
+
+  'assets.homeOwn': true,
+  'assets.homeAddress': '1420 Riverside Avenue, Jacksonville, FL 32204',
+  'assets.homeTitle': 'joint_spouse',
+  'assets.homestead': true,
+  'assets.realEstate': [{ description: 'Mountain cabin', state: 'NC', title: 'Joint with spouse', value: '260000' }],
+  'assets.accounts': [
+    { institution: 'First Coast Bank', type: 'checking', value: '85000', beneficiary: '' },
+    { institution: 'Vanguard', type: 'brokerage', value: '340000', beneficiary: '' },
+    { institution: 'Fidelity', type: 'retirement', value: '210000', beneficiary: 'Spouse (primary)' },
+  ],
+  'assets.lifeInsurance': [{ company: 'Northwestern Mutual', deathBenefit: '500000', beneficiary: 'John Alan Carter' }],
+  'assets.ownsBusiness': { value: 'no' },
+  'assets.digitalAssets': { value: 'no' },
+  'assets.firearms': { value: 'no' },
+
+  'gifts.specific': [
+    { description: '$10,000', recipient: 'First Baptist Church of Jacksonville', recipientType: 'charity', ifPredeceased: 'lapse' },
+  ],
+  'gifts.personalPropertyMemo': true,
+
+  'dist.narrative':
+    'Everything to my husband if he survives me. If he does not, everything in trust for our children until they are older.',
+  'dist.residuary': [{ name: 'John Alan Carter', relationship: 'spouse', sharePercent: '100', ifPredeceased: 'per_stirpes' }],
+  'dist.ultimateBackstop': 'My then-living descendants, and if none, the American Red Cross.',
+  'dist.howReceived': 'staggered',
+  'dist.stagedAges': '25, 30, 35',
+  'dist.minorPotTrust': 'pot',
+  'dist.trusteeStandard': 'hems',
+  'dist.divorceProtection': true,
+  'dist.remainderPOA': 'bloodline',
+  'dist.trustProtector': true,
+
+  'fid.personalRep': [
+    { fullName: 'John Alan Carter', relationship: 'spouse', city: 'Jacksonville', state: 'FL' },
+    { fullName: 'Margaret Ellis', relationship: 'sister', city: 'Tampa', state: 'FL' },
+  ],
+  'fid.trustee': [
+    { fullName: 'John Alan Carter', relationship: 'spouse', city: 'Jacksonville', state: 'FL', isUSCitizen: true },
+    { fullName: 'Margaret Ellis', relationship: 'sister', city: 'Tampa', state: 'FL', isUSCitizen: true },
+  ],
+  'fid.trustProtectorName': 'Margaret Ellis; then First Coast Trust Company',
+  'fid.poaAgent': [{ fullName: 'John Alan Carter', relationship: 'spouse', city: 'Jacksonville', state: 'FL' }],
+  'fid.surrogate': [{ fullName: 'John Alan Carter', relationship: 'spouse', phone: '904-555-0101' }],
+  'fid.guardian': [{ fullName: 'Margaret Ellis', relationship: 'sister', city: 'Tampa', state: 'FL' }],
+  'fid.excluded': { value: 'no' },
+  'fid.bondWaived': true,
+
+  'minors.guardianMoneySamePerson': 'different',
+  'minors.educationOffTop': 'off_top',
+  'minors.wishes': 'Raise them near their cousins and support their education through college.',
+
+  'poa.gifting': true,
+  'poa.realEstate': true,
+  'poa.beneficiaryChanges': false,
+  'poa.trustPowers': true,
+  'poa.medicaidPlanning': true,
+  'poa.digital': true,
+
+  'health.surrogateNow': 'only_incapacity',
+  'health.lifeProlonging': 'withhold',
+  'health.artificialNutrition': true,
+  'health.comfortCare': true,
+  'health.organDonation': 'yes_any',
+  'health.hipaaRelease': 'John Alan Carter (husband)\nMargaret Ellis (sister)',
+  'health.wishes': 'I would like to be at home if possible.',
+
+  'health.specificTreatments': 'I would accept short-term intubation if recovery is likely, but not indefinite mechanical ventilation.',
+  'health.dementiaWishes': 'If I no longer recognize my family, focus on comfort rather than aggressive treatment.',
+
+  'digital.executorAccess': 'full',
+
+  'final.disposition': 'cremation',
+  'final.location': 'Ashes to be scattered at Amelia Island.',
+  'final.agent': 'John Alan Carter',
+  'final.instructions': 'A simple memorial service; no viewing.',
+
+  'protect.tbe': { value: 'yes' },
+  'tax.priorGiftReturns': { value: 'no' },
+  'debts.familyLoans': { value: 'no' },
+
+  'existing.hasWill': { value: 'no' },
+  'existing.hasTrust': { value: 'no' },
+  'existing.reasonNow': 'We just had our second child and bought the cabin.',
+}
 
 async function main() {
   const passwordHash = await bcrypt.hash(SEED_PASSWORD, 12)
 
   const org = await prisma.organization.create({
-    data: { name: 'Meridian Health Telehealth Clinic' },
+    data: { name: 'Sunshine Estate Law, PLLC', stateCode: 'FL', barName: 'The Florida Bar' },
+  })
+
+  // Seed the firm's document price catalog with placeholder fees.
+  await prisma.documentPrice.createMany({
+    data: (Object.keys(DOCUMENT_LABELS) as DocumentType[]).map((type) => ({
+      organizationId: org.id,
+      type,
+      amountCents: PLACEHOLDER_PRICES_CENTS[type],
+      currency: 'usd',
+      active: true,
+    })),
   })
 
   const admin = await prisma.user.create({
-    data: {
-      organizationId: org.id,
-      email: 'admin@meridianhealth.test',
-      passwordHash,
-      role: 'ADMIN',
-      firstName: 'Ana',
-      lastName: 'Ramirez',
-    },
+    data: { organizationId: org.id, email: 'admin@estatecreate.test', passwordHash, role: 'ADMIN', firstName: 'Alex', lastName: 'Rivera' },
+  })
+  const attorney = await prisma.user.create({
+    data: { organizationId: org.id, email: 'attorney@estatecreate.test', passwordHash, role: 'ATTORNEY', firstName: 'Dana', lastName: 'Whitfield', barNumber: '0123456' },
+  })
+  await prisma.user.create({
+    data: { organizationId: org.id, email: 'paralegal@estatecreate.test', passwordHash, role: 'PARALEGAL', firstName: 'Priya', lastName: 'Nair' },
+  })
+  const client = await prisma.user.create({
+    data: { organizationId: org.id, email: 'client@estatecreate.test', passwordHash, role: 'CLIENT', firstName: 'Sarah', lastName: 'Carter', phone: '904-555-0100' },
   })
 
-  const staff = await prisma.user.create({
-    data: {
-      organizationId: org.id,
-      email: 'staff@meridianhealth.test',
-      passwordHash,
-      role: 'STAFF',
-      firstName: 'Sam',
-      lastName: 'Okafor',
-    },
-  })
-
-  const clinicianUser = await prisma.user.create({
-    data: {
-      organizationId: org.id,
-      email: 'clinician@meridianhealth.test',
-      passwordHash,
-      role: 'CLINICIAN',
-      firstName: 'Dr. Priya',
-      lastName: 'Nair',
-    },
-  })
-
-  const provider = await prisma.provider.create({
-    data: {
-      userId: clinicianUser.id,
-      npi: '1234567890',
-      specialties: ['Family Medicine', 'Telehealth Primary Care'],
-      bio: 'Board-certified family medicine physician with 10 years of virtual care experience.',
-    },
-  })
-
-  await prisma.providerLicense.createMany({
-    data: [
-      {
-        providerId: provider.id,
-        state: 'CA',
-        licenseNumber: 'CA-A123456',
-        issuedAt: new Date('2019-01-01'),
-        expiresAt: new Date('2027-01-01'),
-      },
-      {
-        providerId: provider.id,
-        state: 'TX',
-        licenseNumber: 'TX-B654321',
-        issuedAt: new Date('2020-06-01'),
-        expiresAt: new Date('2026-12-01'),
-      },
-    ],
-  })
-
-  const patientUser = await prisma.user.create({
-    data: {
-      organizationId: org.id,
-      email: 'patient@meridianhealth.test',
-      passwordHash,
-      role: 'PATIENT',
-      firstName: 'Jordan',
-      lastName: 'Lee',
-      phone: '555-010-1234',
-    },
-  })
-
-  const patient = await prisma.patient.create({
-    data: {
-      userId: patientUser.id,
-      dateOfBirth: new Date('1990-04-12'),
-      addressLine1: '123 Main St',
-      city: 'Austin',
-      state: 'TX',
-      postalCode: '78701',
-      emergencyContactName: 'Casey Lee',
-      emergencyContactPhone: '555-010-5678',
-    },
-  })
-
+  // Signup-time consents for the client.
   await prisma.consentRecord.createMany({
     data: [
-      { patientId: patient.id, type: 'PRIVACY_NOTICE', version: '2026-01-v1', ipAddress: '127.0.0.1' },
-      { patientId: patient.id, type: 'TELEHEALTH_CONSENT', version: '2026-01-v1', ipAddress: '127.0.0.1' },
-      { patientId: patient.id, type: 'TERMS_OF_SERVICE', version: '2026-01-v1', ipAddress: '127.0.0.1' },
+      { userId: client.id, type: 'TERMS_OF_SERVICE', version: '2026-09-v1' },
+      { userId: client.id, type: 'PRIVACY_NOTICE', version: '2026-09-v1' },
+      { userId: client.id, type: 'ELECTRONIC_RECORDS_CONSENT', version: '2026-09-v1' },
     ],
   })
 
-  const appointment = await prisma.appointment.create({
-    data: {
-      patientId: patient.id,
-      providerId: provider.id,
-      scheduledAt: new Date(Date.now() + 1000 * 60 * 60 * 24),
-      visitType: 'VIDEO',
-      status: 'SCHEDULED',
-      reasonForVisit: 'Annual wellness check-in',
-      stateAtTimeOfVisit: patient.state,
-    },
-  })
-
-  await prisma.invoice.create({
-    data: {
-      patientId: patient.id,
-      appointmentId: appointment.id,
-      amountCents: 12500,
-      status: 'OPEN',
-    },
-  })
-
-  await prisma.lead.create({
+  const matter = await prisma.estateMatter.create({
     data: {
       organizationId: org.id,
-      firstName: 'Taylor',
-      lastName: 'Morgan',
-      email: 'taylor.morgan@example.test',
-      phone: '555-010-9999',
-      source: 'website-form',
-      status: 'NEW',
-      assignedToId: staff.id,
+      clientId: client.id,
+      attorneyId: attorney.id,
+      reference: 'EC-2026-000042',
+      status: 'INTAKE',
     },
   })
 
+  await prisma.questionnaireResponse.create({
+    data: {
+      matterId: matter.id,
+      kind: 'TRIAGE',
+      version: 1,
+      answers: TRIAGE_ANSWERS as object,
+      progress: computeProgress(getQuestionnaire('TRIAGE'), TRIAGE_ANSWERS) as object,
+      completedAt: new Date(),
+    },
+  })
+  await prisma.questionnaireResponse.create({
+    data: {
+      matterId: matter.id,
+      kind: 'ESTATE_INTAKE',
+      version: 1,
+      answers: INTAKE_ANSWERS as object,
+      progress: computeProgress(getQuestionnaire('ESTATE_INTAKE'), INTAKE_ANSWERS) as object,
+      completedAt: new Date(),
+    },
+  })
+
+  // Build the quote, then simulate the client paying for the full set so the
+  // demo matter shows a paid engagement with documents in the review queue.
+  await buildQuoteForMatter(matter.id, client.id)
+  const quote = await getActiveQuote(matter.id)
+  if (!quote) throw new Error('Seed: quote was not created')
+  // Demo client accepts every recommended document (incl. proposed add-ons).
+  await prisma.quoteItem.updateMany({ where: { quoteId: quote.id }, data: { selected: true } })
+  const items = await prisma.quoteItem.findMany({ where: { quoteId: quote.id } })
+  const payment = await prisma.payment.create({
+    data: {
+      quoteId: quote.id,
+      matterId: matter.id,
+      provider: 'mock',
+      externalRef: 'seed',
+      amountCents: items.reduce((s, i) => s + i.unitPriceCents, 0),
+      currency: 'usd',
+      status: 'PENDING',
+      paidForTypes: items.map((i) => i.type),
+    },
+  })
+  // Finalize the payment — this releases generation for the paid-for types.
+  await finalizePayment(payment.id, client.id)
+  const result = { count: await prisma.generatedDocument.count({ where: { matterId: matter.id, status: { not: 'SUPERSEDED' } } }) }
+
   console.log('Seed complete.')
-  console.log('Sign in with any of these (password: %s):', SEED_PASSWORD)
-  console.log(' - admin@meridianhealth.test (ADMIN)')
-  console.log(' - staff@meridianhealth.test (STAFF)')
-  console.log(' - clinician@meridianhealth.test (CLINICIAN)')
-  console.log(' - patient@meridianhealth.test (PATIENT)')
-  console.log('Staff/clinician/admin accounts must complete MFA enrollment on first login.')
+  console.log(`  Organization: ${org.name}`)
+  console.log(`  Admin:     admin@estatecreate.test / ${SEED_PASSWORD}`)
+  console.log(`  Attorney:  attorney@estatecreate.test / ${SEED_PASSWORD}`)
+  console.log(`  Paralegal: paralegal@estatecreate.test / ${SEED_PASSWORD}`)
+  console.log(`  Client:    client@estatecreate.test / ${SEED_PASSWORD}`)
+  console.log(`  Matter ${matter.reference}: paid quote, generated ${result.count} documents.`)
 }
 
 main()
@@ -158,6 +279,4 @@ main()
     console.error(e)
     process.exit(1)
   })
-  .finally(async () => {
-    await prisma.$disconnect()
-  })
+  .finally(() => prisma.$disconnect())

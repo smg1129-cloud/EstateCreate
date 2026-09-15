@@ -24,5 +24,8 @@ next-env.d.ts
 # prisma
 /prisma/dev.db
 
+# generated document artifacts (local storage adapter) — never commit client docs
+/.data/
+
 # separate project with its own repo (github.com/smg1129-cloud/ID-Scan)
 /ID-Scan/

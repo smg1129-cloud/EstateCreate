@@ -1,25 +1,84 @@
-# Meridian Health — Telehealth Clinic Platform
+# EstateCreate — Automated Florida Estate Planning
 
-A telehealth clinic website with an integrated CRM (leads, patient
-directory, communications) and ERM/EHR (clinical charts, notes,
-prescriptions) portal, built with a HIPAA-conscious architecture.
+A web application where a client creates an account, answers a guided
+questionnaire, and receives a complete set of Florida estate-planning
+documents that are **assembled by a deterministic, coded document engine
+(not an LLM)** and then **reviewed and approved by a licensed attorney**
+before they can be downloaded or signed.
 
-**Before this handles a real patient, read [COMPLIANCE.md](./COMPLIANCE.md).**
-This codebase implements the technical safeguards (access control, audit
-logging, MFA, consent capture, licensure checks, encryption) but legal
-compliance also requires signed BAAs, a formal Security Risk Assessment,
-and legal review — none of which code alone can provide.
+**Before this prepares a real client's plan, read
+[COMPLIANCE.md](./COMPLIANCE.md).** The code implements the technical
+workflow (account control, audit logging, MFA, consent capture, the
+document engine, and the attorney-review gate) but the unauthorized
+practice of law, malpractice exposure, and execution formalities are
+addressed by qualified people and processes, not by source code alone.
+
+## What it does
+
+1. **Client registers** and accepts the engagement / electronic-records terms.
+2. **Triage questionnaire** identifies the appropriate plan — will-based or
+   trust-based — from the client's goals and situation.
+3. **Estate & asset questionnaire** captures family, assets, fiduciaries,
+   distribution wishes, incapacity preferences, and health-care wishes
+   (a generation-focused distillation of the firm's full FL client
+   questionnaire).
+4. **The client reviews a quote and pays.** A per-document flat fee is quoted
+   from the recommended set (base documents from triage; additional documents
+   the detailed questionnaire surfaces are presented as opt-in suggestions).
+   The client selects what to buy and pays — **documents are not generated
+   until payment succeeds.** Fees are set by the firm in Admin → Pricing;
+   payments go through an adapter (mock by default). See
+   [COMPLIANCE.md](./COMPLIANCE.md) on flat-fee/trust-accounting obligations.
+5. **The engine assembles the paid documents deterministically** from a fixed
+   clause library and attaches attorney-facing issue-spotting flags drawn from
+   the firm's 36-module attorney checklist (with statutory anchors).
+6. **An attorney reviews** each document, sees the flags, and
+   approves / requests changes / rejects. Nothing is released or signable
+   until an attorney has **approved that exact version**.
+7. **Execution** by e-signature / remote online notarization through an
+   adapter (mock by default), with Florida-specific execution instructions.
+
+## Documents in the suite
+
+Last Will & Testament · Revocable Living Trust + Pour-Over Will · Durable
+Power of Attorney · Designation of Health Care Surrogate · Living Will ·
+HIPAA Authorization · Special Needs Trust · Personal Property Memorandum ·
+Pre-Need Guardian Designation. The set for a given client is chosen
+automatically by the rules engine.
+
+## The document engine (no AI)
+
+```
+questionnaire answers
+      │  buildContext()            src/lib/documents/context.ts
+      ▼
+  IntakeContext (typed)
+      │  recommendDocuments()      src/lib/documents/rules.ts  → doc set + flags
+      ▼
+  generators (one per doc type)    src/lib/documents/generators/*
+      │  → DocumentModel (blocks)  src/lib/documents/blocks.ts
+      ▼
+  renderers                        src/lib/documents/render/{html,docx,pdf}.ts
+      ▼
+  HTML preview · DOCX (editable) · PDF (print/sign)
+```
+
+A generator is ordinary TypeScript mapping a typed context to an ordered
+list of blocks using fixed clause language. For a given input it always
+produces the same output — the document is reproducible and diffable, and
+its content is hashed so a regeneration that changes nothing an attorney
+already approved can be detected.
 
 ## Stack
 
 - Next.js 14 (App Router) + TypeScript
 - PostgreSQL + Prisma
-- Auth.js (NextAuth) credentials + TOTP MFA
+- Auth.js (NextAuth): email/password + TOTP MFA for staff; optional social
+  login (Google / Microsoft / Apple / Facebook) for clients — see
+  [docs/ops/auth-providers.md](./docs/ops/auth-providers.md)
 - Tailwind CSS
-- Video: Daily.co adapter (mock adapter by default)
-- Payments: Stripe adapter (mock adapter by default)
-- E-prescribing: adapter interface only, mock implementation (see
-  COMPLIANCE.md — real e-prescribing requires a certified vendor)
+- `docx` (Word output) and `pdfkit` (PDF output) — deterministic, pure JS
+- E-sign / RON: adapter interface with a mock implementation by default
 
 ## Getting started
 
@@ -28,63 +87,64 @@ cp .env.example .env
 # generate real values for NEXTAUTH_SECRET and FIELD_ENCRYPTION_KEY:
 #   openssl rand -base64 32
 
-docker-compose up -d          # starts local Postgres
+docker-compose up -d          # local Postgres
 npm install
-npm run db:migrate            # creates the schema
-npm run db:seed               # seeds a sample org, users, and one appointment
+npm run db:migrate            # create the schema
+npm run db:seed               # firm, staff, and one demo client with generated docs
 npm run dev                   # http://localhost:3000
 ```
 
-Seeded accounts (password `DevPassword!123` for all — see
-`prisma/seed.ts`):
+Seeded accounts (password `DevPassword!123`):
 
 | Email | Role |
 |---|---|
-| `admin@meridianhealth.test` | Admin |
-| `staff@meridianhealth.test` | Staff |
-| `clinician@meridianhealth.test` | Clinician |
-| `patient@meridianhealth.test` | Patient |
+| `admin@estatecreate.test` | Admin |
+| `attorney@estatecreate.test` | Attorney |
+| `paralegal@estatecreate.test` | Paralegal |
+| `client@estatecreate.test` | Client |
 
-Staff/clinician/admin accounts must complete MFA enrollment (`/mfa/setup`)
-on first login before they can reach any other screen.
+Staff accounts must complete MFA enrollment (`/mfa/setup`) on first login.
+
+## Verifying it end-to-end
+
+1. **As a new client:** register at `/register`, complete the two
+   questionnaires; on submitting the second, your documents are generated
+   and appear under **My Documents** as "In attorney review."
+2. **As the attorney** (`attorney@estatecreate.test`, then enroll MFA):
+   open the **Review queue**, open the seeded matter, read the plan
+   recommendation and issue-spotting notes, open a document, preview it,
+   and **Approve** it (or request changes with a note).
+3. **Back as the client:** the approved document can now be downloaded
+   (PDF/Word) and sent for signing (mock RON completes the loop).
+4. **As admin** (`admin@estatecreate.test`): check **Audit log** — intake,
+   generation, review decisions, downloads, and signing all appear.
+
+## Deploying to your own server
+
+To run EstateCreate on an Ubuntu box — including reaching a box that isn't on
+your current network (Tailscale), and a production install behind Nginx + TLS
+with systemd — see **[DEPLOY.md](./DEPLOY.md)**.
 
 ## Project layout
 
 ```
-src/app/(marketing)/    Public site + booking/intake flow
-src/app/portal/         Patient portal (appointments, records, billing, messages)
-src/app/staff/          Staff CRM (leads, patient directory, tasks)
-src/app/clinician/      Clinician dashboard + ERM/EHR (charts, notes, prescriptions)
-src/app/admin/          User management, provider license tracking, audit log
-src/lib/                Auth, RBAC, audit logging, encryption, and vendor adapters
-prisma/schema.prisma    Data model
+src/app/(marketing)/     Public site + legal/disclaimers
+src/app/register,login   Client sign-up and sign-in
+src/app/portal/          Client portal (intake, documents, signing)
+src/app/attorney/        Attorney/paralegal review workspace
+src/app/admin/           Users + audit log
+src/lib/questionnaire/   Questionnaire definitions + engine (types, visibility)
+src/lib/documents/       The document engine: context, rules, generators, renderers
+src/lib/matters/         Service layer (DB + storage + audit + e-sign)
+src/lib/{esign,storage}/ Adapter interfaces (mock implementations)
+prisma/schema.prisma     Data model
 ```
-
-## Verifying it end-to-end
-
-1. As an anonymous visitor, go through `/book` — pick a state with license
-   coverage (seed data covers CA and TX), choose a provider and time,
-   fill in patient info, and accept the consent checkboxes.
-2. Sign in as `patient@meridianhealth.test` and check `/portal` —
-   appointment, billing (Pay Now works with the mock payment adapter),
-   messages, profile.
-3. Sign in as `clinician@meridianhealth.test` (completes MFA enrollment on
-   first login), open the seeded patient's chart from `/clinician`, add a
-   SOAP note, a medication, and a prescription, then start the visit
-   (mock video — shows your camera locally).
-4. Sign in as `staff@meridianhealth.test` and confirm `/staff/leads` and
-   `/staff/patients` load, and that clinical content is *not* visible
-   there.
-5. Sign in as `admin@meridianhealth.test` and check `/admin/audit-log` —
-   the chart view and note/medication/prescription creation from step 3
-   should all appear.
 
 ## Switching adapters to real vendors
 
-Set the relevant `*_PROVIDER` env var and fill in credentials:
-- `VIDEO_PROVIDER=daily` + `DAILY_API_KEY`
-- `PAYMENTS_PROVIDER=stripe` + `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET`
-- `PRESCRIBING_PROVIDER` has no real option yet — see COMPLIANCE.md.
-
-Confirm a BAA is signed with each vendor before pointing them at real
-patient data.
+- `DOC_STORAGE_PROVIDER=s3` (implement the S3 adapter) for encrypted object
+  storage of rendered documents.
+- `ESIGN_PROVIDER=…` for a Florida-registered remote online notarization
+  platform. Florida RON and electronic wills carry strict statutory
+  requirements — see COMPLIANCE.md and confirm the vendor and workflow
+  before any real document is executed.

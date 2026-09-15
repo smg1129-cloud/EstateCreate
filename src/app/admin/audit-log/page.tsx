@@ -1,54 +1,58 @@
+import { redirect } from 'next/navigation'
+import { getCurrentUser } from '@/lib/session'
+import { requireRole } from '@/lib/rbac'
 import { db } from '@/lib/db'
 
-export default async function AdminAuditLogPage() {
-  const entries = await db.auditLog.findMany({
+export default async function AuditLogPage() {
+  const actor = await getCurrentUser()
+  if (!actor) redirect('/login')
+  requireRole(actor, ['ADMIN'])
+
+  // Scope to actors within this organization.
+  const orgUserIds = (
+    await db.user.findMany({ where: { organizationId: actor.organizationId }, select: { id: true } })
+  ).map((u) => u.id)
+
+  const logs = await db.auditLog.findMany({
+    where: { actorId: { in: orgUserIds } },
+    include: { actor: { select: { firstName: true, lastName: true, role: true } } },
     orderBy: { createdAt: 'desc' },
     take: 200,
-    include: { actor: true },
   })
 
   return (
-    <div>
-      <h1 className="text-2xl font-semibold text-gray-900">Audit log</h1>
-      <p className="mt-1 text-sm text-gray-500">
-        Append-only record of authentication events and PHI access/mutation (HIPAA Security Rule
-        §164.312(b)). Most recent 200 events.
-      </p>
-
-      <table className="mt-6 w-full text-left text-xs">
-        <thead className="border-b border-gray-200 uppercase text-gray-500">
-          <tr>
-            <th className="py-2 pr-4">Time</th>
-            <th className="py-2 pr-4">Actor</th>
-            <th className="py-2 pr-4">Action</th>
-            <th className="py-2 pr-4">Entity</th>
-            <th className="py-2 pr-4">IP</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-gray-100">
-          {entries.map((e) => (
-            <tr key={e.id}>
-              <td className="py-1.5 pr-4 whitespace-nowrap text-gray-600">{new Date(e.createdAt).toLocaleString()}</td>
-              <td className="py-1.5 pr-4 text-gray-800">
-                {e.actor.firstName} {e.actor.lastName}
-              </td>
-              <td className="py-1.5 pr-4 text-gray-800">{e.action}</td>
-              <td className="py-1.5 pr-4 text-gray-600">
-                {e.entityType}
-                {e.entityId ? `#${e.entityId.slice(0, 8)}` : ''}
-              </td>
-              <td className="py-1.5 pr-4 text-gray-400">{e.ipAddress ?? '—'}</td>
-            </tr>
-          ))}
-          {entries.length === 0 && (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold text-gray-900">Audit log</h1>
+        <p className="text-sm text-gray-500">Append-only record of access and actions. Showing the 200 most recent events.</p>
+      </div>
+      <div className="overflow-hidden rounded-lg border border-gray-100 bg-white">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50 text-left text-xs uppercase tracking-wide text-gray-500">
             <tr>
-              <td colSpan={5} className="py-4 text-gray-400">
-                No audit events yet.
-              </td>
+              <th className="px-4 py-3">When</th>
+              <th className="px-4 py-3">Actor</th>
+              <th className="px-4 py-3">Action</th>
+              <th className="px-4 py-3">Entity</th>
             </tr>
-          )}
-        </tbody>
-      </table>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {logs.map((l) => (
+              <tr key={l.id}>
+                <td className="px-4 py-2 text-gray-500">{new Date(l.createdAt).toLocaleString()}</td>
+                <td className="px-4 py-2 text-gray-800">
+                  {l.actor.firstName} {l.actor.lastName} <span className="text-xs text-gray-400">({l.actor.role})</span>
+                </td>
+                <td className="px-4 py-2 font-medium text-gray-700">{l.action}</td>
+                <td className="px-4 py-2 text-gray-500">
+                  {l.entityType}
+                  {l.entityId ? <span className="text-xs text-gray-400"> · {l.entityId.slice(0, 8)}</span> : null}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }
